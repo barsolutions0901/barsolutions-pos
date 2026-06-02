@@ -2056,6 +2056,7 @@
         <a onclick="showPage('user-mgmt')" id="nav-user-mgmt" class="sidebar-link"><i class="bi bi-people-fill me-3"></i> Kelola User</a>
     </div>
     <div class="sidebar-section-title">Shift</div>
+    <a onclick="showPage('settings')" id="nav-settings" class="sidebar-link"><i class="bi bi-gear-fill me-3"></i> Pengaturan Sistem</a>
     <a onclick="showClosingModal()" class="sidebar-link"><i class="bi bi-door-closed-fill me-3"></i> Closing Shift</a>
     <a onclick="showPage('rekap-shift')" id="nav-rekap-shift" class="sidebar-link"><i class="bi bi-journal-text me-3"></i> Rekap Shift</a>
     <div class="mt-auto p-3"><button class="btn btn-outline-danger w-100 btn-sm" onclick="logout()">LOGOUT</button></div>
@@ -2703,6 +2704,10 @@
     </div>
 </div>
 
+<div id="page-settings" style="display:none">
+    <!-- Diisi oleh renderSettingsPage() di JavaScript -->
+</div>
+
 </div><!-- end main-content -->
 
 <!-- ================================================================ MODALS ================================================================ -->
@@ -3122,9 +3127,642 @@
 // =============================================================
 // GLOBAL STATE
 // =============================================================
-const API_URL = "https://script.google.com/macros/s/AKfycbzJhblbEDywL4ZkUKzVYK9LUEX0ru8lpfiPyNrKWJNoFqWYqiXecrRrTMvGlhOZcvWz/exec";
+// [V17] API_URL dikelola oleh SettingsManager — jangan hardcode
+let API_URL = 'https://script.google.com/macros/s/AKfycbw8_936fcl1bqBjsZZllNCD_04K8nQNt_YsuHDLwy3DhHwYo0VDgtNuf5NbsHVV1mlG/exec';
 let DATA = { products:[], tables:[], history:[], expenses:[], modal:[], users:[], branches:[], shifts:[], absenLog:[], rekapShift:[] };
 let CART = [], AKTIF_MEJA = "", KASIR = "", TOTAL_CART = 0;
+// [V16] PaymentSession state
+let ACTIVE_SESSION_ID = null;
+let ACTIVE_TRX_ID     = null;
+
+// =====================================================================
+// [V17] SETTINGS MANAGER (integrated from Backend_v18.js patch)
+// =====================================================================
+// =============================================================
+// BARSOLUTION POS V17 — SETTINGS MANAGER
+// =============================================================
+
+const SETTINGS_SCHEMA = {
+    _version: { default: 1, type: 'int' },
+    nama_toko:    { default: 'D&B Coffee Premium',                        type: 'string', tab: 'general' },
+    alamat_toko:  { default: 'Jl. T. Muda Lamkuta, Lhokseumawe',         type: 'string', tab: 'general' },
+    whatsapp:     { default: '',                                          type: 'string', tab: 'general' },
+    footer_struk: { default: 'Terima kasih atas kunjungan Anda!',         type: 'string', tab: 'general' },
+    logo_url:     { default: 'https://lh3.googleusercontent.com/d/1qiyKZSuCfpSOjWq0ciH6wodGK9bLXDLW', type: 'string', tab: 'general' },
+    api_url:            { default: 'https://script.google.com/macros/s/AKfycbw8_936fcl1bqBjsZZllNCD_04K8nQNt_YsuHDLwy3DhHwYo0VDgtNuf5NbsHVV1mlG/exec', type: 'string', tab: 'backend' },
+    spreadsheet_id:     { default: '',                                    type: 'string', tab: 'backend' },
+    display_interval:   { default: 2,                                     type: 'int',    tab: 'backend' },
+    qris_mode:          { default: 'static',   type: 'select',  tab: 'payment', options: ['static','dynamic'] },
+    qris_image_url:     { default: '',         type: 'string',  tab: 'payment' },
+    payment_gateway:    { default: 'none',     type: 'select',  tab: 'payment', options: ['none','tripay','midtrans','xendit','duitku'] },
+    merchant_code:      { default: '',         type: 'string',  tab: 'payment' },
+    api_key:            { default: '',         type: 'password',tab: 'payment' },
+    private_key:        { default: '',         type: 'password',tab: 'payment' },
+    callback_url:       { default: '',         type: 'string',  tab: 'payment' },
+    pajak_persen:       { default: 0,          type: 'float',   tab: 'pos' },
+    service_charge:     { default: 0,          type: 'float',   tab: 'pos' },
+    auto_print:         { default: false,      type: 'bool',    tab: 'pos' },
+    enable_display:     { default: true,       type: 'bool',    tab: 'pos' },
+    enable_split_bill:  { default: true,       type: 'bool',    tab: 'pos' },
+    enable_qris:        { default: true,       type: 'bool',    tab: 'pos' },
+    struk_header:       { default: '',         type: 'string',  tab: 'printer' },
+    struk_footer:       { default: '',         type: 'string',  tab: 'printer' },
+    paper_width:        { default: '58',       type: 'select',  tab: 'printer', options: ['58','80'] },
+    display_mode:       { default: 'auto',     type: 'select',  tab: 'display', options: ['auto','per_meja'] },
+    idle_timeout:       { default: 30,         type: 'int',     tab: 'display' },
+    paid_screen_duration: { default: 6,        type: 'int',     tab: 'display' },
+};
+
+const SETTINGS_VERSION = 1;
+const SETTINGS_STORAGE_KEY = 'barsolution_settings_v17';
+
+const SettingsManager = {
+    _cache: null,
+    load() {
+        try {
+            const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
+            this._cache = raw ? JSON.parse(raw) : {};
+        } catch(e) {
+            console.warn('[Settings] Gagal parse localStorage, pakai default.', e);
+            this._cache = {};
+        }
+        this._migrate();
+        if (typeof API_URL !== 'undefined') {
+            API_URL = this._cache.api_url || SETTINGS_SCHEMA.api_url.default;
+        }
+        console.log('[Settings V17] Loaded. Version:', this._cache._version);
+    },
+    save() {
+        try {
+            this._cache._version = SETTINGS_VERSION;
+            localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(this._cache));
+            API_URL = this._cache.api_url || SETTINGS_SCHEMA.api_url.default;
+            const pw = parseInt(this._cache.paper_width || '58');
+            localStorage.setItem('rawbt_paper_width', pw === 80 ? '57' : '42');
+            console.log('[Settings V17] Saved.');
+            return true;
+        } catch(e) {
+            console.error('[Settings V17] Gagal simpan:', e);
+            return false;
+        }
+    },
+    get(key) {
+        if (!this._cache) this.load();
+        const val = this._cache[key];
+        if (val === undefined || val === null || val === '') {
+            const schema = SETTINGS_SCHEMA[key];
+            return schema ? schema.default : '';
+        }
+        return val;
+    },
+    set(key, value) {
+        if (!this._cache) this.load();
+        this._cache[key] = value;
+        this.save();
+    },
+    setMany(obj) {
+        if (!this._cache) this.load();
+        Object.assign(this._cache, obj);
+        this.save();
+    },
+    reset() {
+        this._cache = {};
+        Object.keys(SETTINGS_SCHEMA).forEach(k => {
+            this._cache[k] = SETTINGS_SCHEMA[k].default;
+        });
+        this._cache._version = SETTINGS_VERSION;
+        localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(this._cache));
+        API_URL = SETTINGS_SCHEMA.api_url.default;
+        console.log('[Settings V17] Reset to defaults.');
+    },
+    _migrate() {
+        let changed = false;
+        const savedVersion = this._cache._version || 0;
+        Object.keys(SETTINGS_SCHEMA).forEach(key => {
+            if (this._cache[key] === undefined) {
+                this._cache[key] = SETTINGS_SCHEMA[key].default;
+                changed = true;
+            }
+        });
+        if (savedVersion < 1) {
+            const oldPaperWidth = localStorage.getItem('rawbt_paper_width');
+            if (oldPaperWidth && this._cache.paper_width === SETTINGS_SCHEMA.paper_width.default) {
+                this._cache.paper_width = (parseInt(oldPaperWidth) >= 50) ? '80' : '58';
+                changed = true;
+            }
+            const oldQrisUrl = localStorage.getItem('qris_url_static');
+            if (oldQrisUrl && !this._cache.qris_image_url) {
+                this._cache.qris_image_url = oldQrisUrl;
+                changed = true;
+            }
+        }
+        this._cache._version = SETTINGS_VERSION;
+        if (changed) {
+            try { localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(this._cache)); } catch(e) {}
+        }
+    },
+    export() {
+        return JSON.stringify(this._cache, null, 2);
+    },
+    import(jsonStr) {
+        try {
+            const obj = JSON.parse(jsonStr);
+            if (typeof obj !== 'object' || Array.isArray(obj)) throw new Error('Bukan object JSON');
+            this._cache = obj;
+            this._migrate();
+            this.save();
+            return true;
+        } catch(e) {
+            console.error('[Settings] Import gagal:', e);
+            return false;
+        }
+    }
+};
+
+function renderSettingsPage() {
+    const s = SettingsManager;
+    const el = document.getElementById('page-settings');
+    if (!el) return;
+
+    el.innerHTML = `
+    <div class="container-fluid px-3 py-3">
+        <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+            <h5 class="fw-bold mb-0" style="color:#0f172a">
+                <i class="bi bi-gear-fill me-2" style="color:#3b82f6"></i>Pengaturan Sistem
+            </h5>
+            <div class="d-flex gap-2">
+                <button class="btn btn-sm btn-outline-secondary" onclick="settingsExportBackup()">
+                    <i class="bi bi-download me-1"></i>Backup
+                </button>
+                <button class="btn btn-sm btn-outline-warning" onclick="settingsImportBackup()">
+                    <i class="bi bi-upload me-1"></i>Restore
+                </button>
+                <button class="btn btn-sm btn-outline-danger" onclick="settingsResetConfirm()">
+                    <i class="bi bi-arrow-counterclockwise me-1"></i>Reset
+                </button>
+            </div>
+        </div>
+
+        <ul class="nav nav-tabs mb-3" id="settings-tabs" style="font-size:13px;border-bottom:2px solid #e2e8f0">
+            <li class="nav-item"><a class="nav-link active fw-bold px-3 py-2" data-bs-toggle="tab" href="#stab-general"><i class="bi bi-shop me-1"></i>Umum</a></li>
+            <li class="nav-item"><a class="nav-link fw-bold px-3 py-2" data-bs-toggle="tab" href="#stab-backend"><i class="bi bi-cloud-fill me-1"></i>Backend</a></li>
+            <li class="nav-item"><a class="nav-link fw-bold px-3 py-2" data-bs-toggle="tab" href="#stab-payment"><i class="bi bi-qr-code me-1"></i>Pembayaran</a></li>
+            <li class="nav-item"><a class="nav-link fw-bold px-3 py-2" data-bs-toggle="tab" href="#stab-pos"><i class="bi bi-calculator-fill me-1"></i>POS</a></li>
+            <li class="nav-item"><a class="nav-link fw-bold px-3 py-2" data-bs-toggle="tab" href="#stab-printer"><i class="bi bi-printer-fill me-1"></i>Printer</a></li>
+            <li class="nav-item"><a class="nav-link fw-bold px-3 py-2" data-bs-toggle="tab" href="#stab-display"><i class="bi bi-display me-1"></i>Display</a></li>
+        </ul>
+
+        <div class="tab-content">
+
+            <div class="tab-pane fade show active" id="stab-general">
+                <div class="card shadow-sm border-0 rounded-3"><div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold small text-muted">NAMA TOKO</label>
+                            <input type="text" class="form-control" id="s-nama_toko" value="${_esc(s.get('nama_toko'))}" placeholder="D&B Coffee Premium">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold small text-muted">NOMOR WHATSAPP</label>
+                            <input type="tel" class="form-control" id="s-whatsapp" value="${_esc(s.get('whatsapp'))}" placeholder="6281234567890">
+                            <small class="text-muted">Format internasional tanpa + (contoh: 6281234...)</small>
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label fw-bold small text-muted">ALAMAT TOKO</label>
+                            <input type="text" class="form-control" id="s-alamat_toko" value="${_esc(s.get('alamat_toko'))}" placeholder="Jl. T. Muda Lamkuta, Lhokseumawe">
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label fw-bold small text-muted">FOOTER STRUK</label>
+                            <input type="text" class="form-control" id="s-footer_struk" value="${_esc(s.get('footer_struk'))}" placeholder="Terima kasih atas kunjungan Anda!">
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label fw-bold small text-muted">URL LOGO</label>
+                            <div class="input-group">
+                                <input type="url" class="form-control" id="s-logo_url" value="${_esc(s.get('logo_url'))}" placeholder="https://...">
+                                <button class="btn btn-outline-secondary" onclick="settingsPreviewLogo()" type="button"><i class="bi bi-eye"></i></button>
+                            </div>
+                            <div id="s-logo-preview" class="mt-2 ${s.get('logo_url') ? '' : 'd-none'}">
+                                <img src="${_esc(s.get('logo_url'))}" style="height:48px;object-fit:contain;border:1px solid #e2e8f0;border-radius:8px;padding:4px" onerror="this.style.display='none'">
+                            </div>
+                        </div>
+                    </div>
+                </div></div>
+            </div>
+
+            <div class="tab-pane fade" id="stab-backend">
+                <div class="card shadow-sm border-0 rounded-3"><div class="card-body">
+                    <div class="alert alert-info py-2 px-3 mb-3" style="font-size:12px">
+                        <i class="bi bi-info-circle me-1"></i>
+                        <strong>API URL</strong> harus berupa Google Apps Script Web App URL yang sudah di-deploy. Perubahan langsung berlaku tanpa reload.
+                    </div>
+                    <div class="row g-3">
+                        <div class="col-12">
+                            <label class="form-label fw-bold small text-muted">APPS SCRIPT API URL <span class="text-danger">*</span></label>
+                            <div class="input-group">
+                                <input type="url" class="form-control font-monospace" id="s-api_url" value="${_esc(s.get('api_url'))}" placeholder="https://script.google.com/macros/s/.../exec" style="font-size:11px">
+                                <button class="btn btn-outline-primary" onclick="settingsTestApiUrl()" type="button"><i class="bi bi-lightning-charge-fill"></i> Test</button>
+                            </div>
+                            <small id="s-api-test-result" class="text-muted"></small>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold small text-muted">SPREADSHEET ID <span class="text-muted fw-normal">(opsional)</span></label>
+                            <input type="text" class="form-control font-monospace" id="s-spreadsheet_id" value="${_esc(s.get('spreadsheet_id'))}" placeholder="1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms" style="font-size:11px">
+                            <small class="text-muted">Hanya untuk referensi</small>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold small text-muted">REFRESH INTERVAL DISPLAY (detik)</label>
+                            <input type="number" class="form-control" id="s-display_interval" value="${s.get('display_interval')}" min="1" max="30" step="1">
+                            <small class="text-muted">Customer Display polling setiap N detik. Default: 2</small>
+                        </div>
+                    </div>
+                </div></div>
+            </div>
+
+            <div class="tab-pane fade" id="stab-payment">
+                <div class="card shadow-sm border-0 rounded-3"><div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold small text-muted">QRIS MODE</label>
+                            <select class="form-select" id="s-qris_mode" onchange="settingsToggleQrisFields()">
+                                <option value="static"  ${s.get('qris_mode')==='static'  ? 'selected':''}>Static QRIS (URL gambar tetap)</option>
+                                <option value="dynamic" ${s.get('qris_mode')==='dynamic' ? 'selected':''}>Dynamic QRIS (via Gateway)</option>
+                            </select>
+                        </div>
+                        <div class="col-12" id="s-qris-static-group" style="display:${s.get('qris_mode')==='static'?'block':'none'}">
+                            <label class="form-label fw-bold small text-muted">QRIS IMAGE URL (Static)</label>
+                            <div class="input-group">
+                                <input type="url" class="form-control" id="s-qris_image_url" value="${_esc(s.get('qris_image_url'))}" placeholder="https://... (URL gambar QR code merchant)">
+                                <button class="btn btn-outline-secondary" onclick="settingsPreviewQris()" type="button"><i class="bi bi-eye"></i> Preview</button>
+                            </div>
+                            <div id="s-qris-preview" class="mt-2 text-center ${s.get('qris_image_url') ? '' : 'd-none'}">
+                                <img src="${_esc(s.get('qris_image_url'))}" style="max-height:160px;border:1px solid #e2e8f0;border-radius:8px;padding:6px" onerror="this.style.display='none'">
+                            </div>
+                        </div>
+                        <div class="col-12" id="s-qris-dynamic-group" style="display:${s.get('qris_mode')==='dynamic'?'block':'none'}">
+                            <div class="row g-3">
+                                <div class="col-md-6">
+                                    <label class="form-label fw-bold small text-muted">PAYMENT GATEWAY</label>
+                                    <select class="form-select" id="s-payment_gateway">
+                                        <option value="none"     ${s.get('payment_gateway')==='none'     ? 'selected':''}>-- Pilih Gateway --</option>
+                                        <option value="tripay"   ${s.get('payment_gateway')==='tripay'   ? 'selected':''}>Tripay</option>
+                                        <option value="midtrans" ${s.get('payment_gateway')==='midtrans' ? 'selected':''}>Midtrans</option>
+                                        <option value="xendit"   ${s.get('payment_gateway')==='xendit'   ? 'selected':''}>Xendit</option>
+                                        <option value="duitku"   ${s.get('payment_gateway')==='duitku'   ? 'selected':''}>Duitku</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label fw-bold small text-muted">MERCHANT CODE / ID</label>
+                                    <input type="text" class="form-control font-monospace" id="s-merchant_code" value="${_esc(s.get('merchant_code'))}" placeholder="MXX12345" style="font-size:12px">
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label fw-bold small text-muted">API KEY</label>
+                                    <div class="input-group">
+                                        <input type="password" class="form-control font-monospace" id="s-api_key" value="${_esc(s.get('api_key'))}" placeholder="sk_live_..." style="font-size:12px">
+                                        <button class="btn btn-outline-secondary" type="button" onclick="_togglePwVisibility('s-api_key')"><i class="bi bi-eye"></i></button>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label fw-bold small text-muted">PRIVATE KEY / SECRET</label>
+                                    <div class="input-group">
+                                        <input type="password" class="form-control font-monospace" id="s-private_key" value="${_esc(s.get('private_key'))}" placeholder="pk_live_..." style="font-size:12px">
+                                        <button class="btn btn-outline-secondary" type="button" onclick="_togglePwVisibility('s-private_key')"><i class="bi bi-eye"></i></button>
+                                    </div>
+                                </div>
+                                <div class="col-12">
+                                    <label class="form-label fw-bold small text-muted">CALLBACK URL</label>
+                                    <input type="url" class="form-control font-monospace" id="s-callback_url" value="${_esc(s.get('callback_url'))}" placeholder="https://your-server.com/payment/callback" style="font-size:12px">
+                                    <small class="text-muted">URL yang didaftarkan ke gateway untuk konfirmasi otomatis pembayaran</small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div></div>
+            </div>
+
+            <div class="tab-pane fade" id="stab-pos">
+                <div class="card shadow-sm border-0 rounded-3"><div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold small text-muted">PAJAK (%)</label>
+                            <div class="input-group">
+                                <input type="number" class="form-control" id="s-pajak_persen" value="${s.get('pajak_persen')}" min="0" max="100" step="0.1" placeholder="0">
+                                <span class="input-group-text">%</span>
+                            </div>
+                            <small class="text-muted">Masukkan 0 untuk tidak mengaktifkan pajak</small>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold small text-muted">SERVICE CHARGE (%)</label>
+                            <div class="input-group">
+                                <input type="number" class="form-control" id="s-service_charge" value="${s.get('service_charge')}" min="0" max="100" step="0.1" placeholder="0">
+                                <span class="input-group-text">%</span>
+                            </div>
+                            <small class="text-muted">Masukkan 0 untuk tidak mengaktifkan service charge</small>
+                        </div>
+                        <div class="col-12"><hr class="my-1"></div>
+                        <div class="col-md-6">
+                            <div class="d-flex justify-content-between align-items-center p-3 border rounded-3">
+                                <div><div class="fw-bold small">AUTO PRINT STRUK</div><div class="text-muted" style="font-size:11px">Cetak otomatis setelah transaksi berhasil</div></div>
+                                <div class="form-check form-switch mb-0"><input class="form-check-input" type="checkbox" id="s-auto_print" ${s.get('auto_print') ? 'checked' : ''} style="width:42px;height:22px;cursor:pointer"></div>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="d-flex justify-content-between align-items-center p-3 border rounded-3">
+                                <div><div class="fw-bold small">CUSTOMER DISPLAY</div><div class="text-muted" style="font-size:11px">Aktifkan layar Customer Display</div></div>
+                                <div class="form-check form-switch mb-0"><input class="form-check-input" type="checkbox" id="s-enable_display" ${s.get('enable_display') ? 'checked' : ''} style="width:42px;height:22px;cursor:pointer"></div>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="d-flex justify-content-between align-items-center p-3 border rounded-3">
+                                <div><div class="fw-bold small">SPLIT BILL</div><div class="text-muted" style="font-size:11px">Izinkan pembayaran sebagian</div></div>
+                                <div class="form-check form-switch mb-0"><input class="form-check-input" type="checkbox" id="s-enable_split_bill" ${s.get('enable_split_bill') ? 'checked' : ''} style="width:42px;height:22px;cursor:pointer"></div>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="d-flex justify-content-between align-items-center p-3 border rounded-3">
+                                <div><div class="fw-bold small">QRIS</div><div class="text-muted" style="font-size:11px">Aktifkan metode pembayaran QRIS</div></div>
+                                <div class="form-check form-switch mb-0"><input class="form-check-input" type="checkbox" id="s-enable_qris" ${s.get('enable_qris') ? 'checked' : ''} style="width:42px;height:22px;cursor:pointer"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div></div>
+            </div>
+
+            <div class="tab-pane fade" id="stab-printer">
+                <div class="card shadow-sm border-0 rounded-3"><div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-md-4">
+                            <label class="form-label fw-bold small text-muted">LEBAR KERTAS</label>
+                            <select class="form-select" id="s-paper_width">
+                                <option value="58" ${s.get('paper_width')==='58'?'selected':''}>58mm (42 karakter)</option>
+                                <option value="80" ${s.get('paper_width')==='80'?'selected':''}>80mm (57 karakter)</option>
+                            </select>
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label fw-bold small text-muted">HEADER STRUK TAMBAHAN</label>
+                            <textarea class="form-control font-monospace" id="s-struk_header" rows="3" placeholder="Baris tambahan di atas struk (opsional)" style="font-size:12px">${_esc(s.get('struk_header'))}</textarea>
+                            <small class="text-muted">Ditampilkan di bawah logo dan nama toko. Satu baris per enter.</small>
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label fw-bold small text-muted">FOOTER STRUK TAMBAHAN</label>
+                            <textarea class="form-control font-monospace" id="s-struk_footer" rows="3" placeholder="Baris tambahan di bawah struk (opsional)" style="font-size:12px">${_esc(s.get('struk_footer'))}</textarea>
+                        </div>
+                    </div>
+                </div></div>
+            </div>
+
+            <div class="tab-pane fade" id="stab-display">
+                <div class="card shadow-sm border-0 rounded-3"><div class="card-body">
+                    <div class="alert alert-secondary py-2 px-3 mb-3" style="font-size:12px">
+                        <i class="bi bi-info-circle me-1"></i>
+                        Buka Customer Display di URL:
+                        <code id="s-display-url" style="word-break:break-all"></code>
+                        <button class="btn btn-sm btn-link p-0 ms-1" onclick="settingsCopyDisplayUrl()" style="font-size:11px">Salin</button>
+                    </div>
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold small text-muted">DISPLAY MODE</label>
+                            <select class="form-select" id="s-display_mode">
+                                <option value="auto"     ${s.get('display_mode')==='auto'     ?'selected':''}>Auto Session (ambil session aktif terbaru)</option>
+                                <option value="per_meja" ${s.get('display_mode')==='per_meja' ?'selected':''}>Per Meja (butuh parameter ?meja=X di URL)</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold small text-muted">POLLING INTERVAL (detik)</label>
+                            <input type="number" class="form-control" id="s-display_interval_2" value="${s.get('display_interval')}" min="1" max="30" step="1">
+                            <small class="text-muted">Sama dengan setting di Tab Backend</small>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold small text-muted">IDLE TIMEOUT (detik)</label>
+                            <input type="number" class="form-control" id="s-idle_timeout" value="${s.get('idle_timeout')}" min="5" max="300" step="5">
+                            <small class="text-muted">Kembali ke layar idle setelah N detik tanpa transaksi. Default: 30</small>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold small text-muted">PAID SCREEN DURATION (detik)</label>
+                            <input type="number" class="form-control" id="s-paid_screen_duration" value="${s.get('paid_screen_duration')}" min="2" max="60" step="1">
+                            <small class="text-muted">Lama tampilan "Terima Kasih" setelah bayar. Default: 6</small>
+                        </div>
+                    </div>
+                </div></div>
+            </div>
+
+        </div>
+
+        <div class="d-flex justify-content-end mt-4 gap-2 pb-4">
+            <button class="btn btn-outline-secondary px-4" onclick="showPage('dash')"><i class="bi bi-x-lg me-1"></i>Batal</button>
+            <button class="btn btn-primary px-5 fw-bold shadow-sm" onclick="settingsSaveAll()" style="background:#3b82f6;border:none;border-radius:10px"><i class="bi bi-floppy-fill me-2"></i>SIMPAN PENGATURAN</button>
+        </div>
+
+    </div>
+    `;
+
+    const dispUrlEl = document.getElementById('s-display-url');
+    if (dispUrlEl) {
+        dispUrlEl.textContent = window.location.origin + window.location.pathname + '?display=1';
+    }
+}
+
+function settingsSaveAll() {
+    const dI2 = document.getElementById('s-display_interval_2');
+    if (dI2) {
+        const diEl = document.getElementById('s-display_interval');
+        if (diEl) diEl.value = dI2.value;
+    }
+
+    const newSettings = {
+        nama_toko:    _sVal('s-nama_toko'),
+        alamat_toko:  _sVal('s-alamat_toko'),
+        whatsapp:     _sVal('s-whatsapp'),
+        footer_struk: _sVal('s-footer_struk'),
+        logo_url:     _sVal('s-logo_url'),
+        api_url:           _sVal('s-api_url').trim().replace(/\/$/, ''),
+        spreadsheet_id:    _sVal('s-spreadsheet_id'),
+        display_interval:  parseInt(_sVal('s-display_interval') || '2') || 2,
+        qris_mode:         _sVal('s-qris_mode'),
+        qris_image_url:    _sVal('s-qris_image_url'),
+        payment_gateway:   _sVal('s-payment_gateway'),
+        merchant_code:     _sVal('s-merchant_code'),
+        api_key:           _sVal('s-api_key'),
+        private_key:       _sVal('s-private_key'),
+        callback_url:      _sVal('s-callback_url'),
+        pajak_persen:      parseFloat(_sVal('s-pajak_persen') || '0') || 0,
+        service_charge:    parseFloat(_sVal('s-service_charge') || '0') || 0,
+        auto_print:        document.getElementById('s-auto_print')?.checked ?? false,
+        enable_display:    document.getElementById('s-enable_display')?.checked ?? true,
+        enable_split_bill: document.getElementById('s-enable_split_bill')?.checked ?? true,
+        enable_qris:       document.getElementById('s-enable_qris')?.checked ?? true,
+        paper_width:   _sVal('s-paper_width'),
+        struk_header:  _sVal('s-struk_header'),
+        struk_footer:  _sVal('s-struk_footer'),
+        display_mode:         _sVal('s-display_mode'),
+        idle_timeout:         parseInt(_sVal('s-idle_timeout') || '30') || 30,
+        paid_screen_duration: parseInt(_sVal('s-paid_screen_duration') || '6') || 6,
+    };
+
+    const ok = SettingsManager.setMany(newSettings);
+    if (ok !== false) {
+        if (newSettings.qris_mode === 'static' && newSettings.qris_image_url) {
+            localStorage.setItem('qris_url_static', newSettings.qris_image_url);
+        }
+        Swal.fire({ icon: 'success', title: 'Tersimpan!', text: 'Pengaturan berhasil disimpan dan langsung aktif.', timer: 2000, showConfirmButton: false, position: 'top-end', toast: true });
+    } else {
+        Swal.fire('Gagal', 'Tidak dapat menyimpan pengaturan.', 'error');
+    }
+}
+
+async function settingsResetConfirm() {
+    const res = await Swal.fire({
+        title: 'Reset Pengaturan?',
+        html: 'Semua pengaturan akan dikembalikan ke <strong>nilai default</strong>.<br><small class="text-muted">Login state dan data tidak terpengaruh.</small>',
+        icon: 'warning', showCancelButton: true, confirmButtonText: 'Ya, Reset', cancelButtonText: 'Batal', confirmButtonColor: '#ef4444'
+    });
+    if (res.isConfirmed) {
+        SettingsManager.reset();
+        renderSettingsPage();
+        Swal.fire({ icon: 'success', title: 'Reset!', text: 'Pengaturan dikembalikan ke default.', timer: 2000, showConfirmButton: false, toast: true, position: 'top-end' });
+    }
+}
+
+function settingsExportBackup() {
+    const json = SettingsManager.export();
+    const blob = new Blob([json], { type: 'application/json' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url;
+    a.download = 'barsolution_settings_' + new Date().toISOString().slice(0,10) + '.json';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
+}
+
+async function settingsImportBackup() {
+    const { value: file } = await Swal.fire({
+        title: 'Restore Backup',
+        html: '<input type="file" id="s-import-file" accept=".json" class="form-control mt-2">',
+        showCancelButton: true, confirmButtonText: 'Restore', cancelButtonText: 'Batal',
+        preConfirm: () => {
+            const f = document.getElementById('s-import-file')?.files?.[0];
+            if (!f) { Swal.showValidationMessage('Pilih file JSON'); return false; }
+            return f;
+        }
+    });
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        const ok = SettingsManager.import(e.target.result);
+        if (ok) {
+            renderSettingsPage();
+            Swal.fire({ icon: 'success', title: 'Restored!', timer: 2000, showConfirmButton: false, toast: true, position: 'top-end' });
+        } else {
+            Swal.fire('Gagal', 'File JSON tidak valid.', 'error');
+        }
+    };
+    reader.readAsText(file);
+}
+
+async function settingsTestApiUrl() {
+    const url = (document.getElementById('s-api_url')?.value || '').trim();
+    if (!url) return Swal.fire('Error', 'Masukkan API URL terlebih dahulu', 'error');
+    const resultEl = document.getElementById('s-api-test-result');
+    if (resultEl) { resultEl.textContent = 'Menghubungkan...'; resultEl.className = 'text-muted small'; }
+    try {
+        const res = await fetch(url, { method: 'POST', body: JSON.stringify({ action: 'getAppData' }) }).then(r => r.json());
+        if (res && (res.products || res.status === 'success')) {
+            if (resultEl) { resultEl.textContent = 'Terhubung! Backend merespons dengan benar.'; resultEl.className = 'text-success small fw-bold'; }
+        } else {
+            if (resultEl) { resultEl.textContent = 'Terhubung tapi respons tidak dikenali: ' + JSON.stringify(res).slice(0,80); resultEl.className = 'text-warning small'; }
+        }
+    } catch(e) {
+        if (resultEl) { resultEl.textContent = 'Gagal: ' + e.message; resultEl.className = 'text-danger small fw-bold'; }
+    }
+}
+
+function settingsToggleQrisFields() {
+    const mode = document.getElementById('s-qris_mode')?.value;
+    const staticGroup  = document.getElementById('s-qris-static-group');
+    const dynamicGroup = document.getElementById('s-qris-dynamic-group');
+    if (staticGroup)  staticGroup.style.display  = (mode === 'static')  ? 'block' : 'none';
+    if (dynamicGroup) dynamicGroup.style.display  = (mode === 'dynamic') ? 'block' : 'none';
+}
+
+function settingsPreviewLogo() {
+    const url  = document.getElementById('s-logo_url')?.value;
+    const wrap = document.getElementById('s-logo-preview');
+    if (!wrap) return;
+    if (!url) { wrap.classList.add('d-none'); return; }
+    wrap.classList.remove('d-none');
+    wrap.querySelector('img').src = url;
+}
+
+function settingsPreviewQris() {
+    const url  = document.getElementById('s-qris_image_url')?.value;
+    const wrap = document.getElementById('s-qris-preview');
+    if (!wrap) return;
+    if (!url) { wrap.classList.add('d-none'); return; }
+    wrap.classList.remove('d-none');
+    wrap.querySelector('img').src = url;
+    wrap.querySelector('img').style.display = 'block';
+}
+
+function settingsCopyDisplayUrl() {
+    const url = document.getElementById('s-display-url')?.textContent || '';
+    navigator.clipboard?.writeText(url).then(() => {
+        Swal.fire({ icon: 'success', title: 'Disalin!', timer: 1500, showConfirmButton: false, toast: true, position: 'top-end' });
+    });
+}
+
+function _sVal(id) {
+    const el = document.getElementById(id);
+    return el ? el.value : '';
+}
+
+function _esc(str) {
+    return String(str || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function _togglePwVisibility(id) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.type = el.type === 'password' ? 'text' : 'password';
+}
+
+function _getQrisUrl() {
+    if (SettingsManager.get('qris_mode') === 'dynamic') {
+        const inputEl = document.getElementById('input-qris-url');
+        if (inputEl && inputEl.value.trim()) return inputEl.value.trim();
+        return '';
+    }
+    return SettingsManager.get('qris_image_url') || localStorage.getItem('qris_url_static') || '';
+}
+
+function getPaperWidthChars() {
+    const w = SettingsManager.get('paper_width');
+    return (w === '80') ? 57 : 42;
+}
+
+function getTaxMultiplier() {
+    const pajak = parseFloat(SettingsManager.get('pajak_persen')) || 0;
+    const sc    = parseFloat(SettingsManager.get('service_charge')) || 0;
+    return 1 + (pajak / 100) + (sc / 100);
+}
+
+function getTaxBreakdown(subtotal) {
+    const pajak  = parseFloat(SettingsManager.get('pajak_persen'))  || 0;
+    const sc     = parseFloat(SettingsManager.get('service_charge')) || 0;
+    const pN     = Math.round(subtotal * pajak / 100);
+    const scN    = Math.round(subtotal * sc / 100);
+    return {
+        pajakPersen:  pajak,
+        scPersen:     sc,
+        pajakNominal: pN,
+        scNominal:    scN,
+        totalNominal: pN + scN,
+        grandTotal:   subtotal + pN + scN
+    };
+}
+
+// =====================================================================
+// [V17] END SETTINGS MANAGER
+// =====================================================================
+
 let revChart = null, produkChart = null;
 let TOTAL_SPLIT = 0;
 let ACTIVE_SHIFT = null; // current shift info for logged-in kasir
@@ -3195,6 +3833,8 @@ function safeData(raw) {
 // INIT
 // =============================================================
 window.onload = () => {
+    // [V17] Load settings pertama kali — harus di baris paling atas
+    SettingsManager.load();
     // ---- MEDIAN.CO: Status bar & back button setup ----
     if (window.MedianBridge) {
         MedianBridge.setStatusBar('dark');
@@ -3239,6 +3879,8 @@ function initMainApp() {
     const role   = (localStorage.getItem('user_role') || 'Kasir').toLowerCase();
     const cabang = localStorage.getItem('user_cabang') || '';
     KASIR = localStorage.getItem('user_nama') || '';
+    // [V17] Sync API_URL dari settings (mungkin sudah diubah user)
+    API_URL = SettingsManager.get('api_url') || API_URL;
 
     document.getElementById('login-page').style.display = 'none';
     document.getElementById('absen-page').style.display = 'none';
@@ -3617,7 +4259,7 @@ function logout() {
 // =============================================================
 function showPage(pageId) {
     const role = (localStorage.getItem('user_role') || 'Kasir').toLowerCase();
-    const adminOnlyPages = ['produk-mgmt','user-mgmt','cabang-mgmt','shift-mgmt'];
+    const adminOnlyPages = ['produk-mgmt','user-mgmt','cabang-mgmt','shift-mgmt','settings'];
    
     if (adminOnlyPages.includes(pageId) && role !== 'admin') {
         Swal.fire({icon:'error',title:'Akses Dibatasi',text:'Menu ini hanya dapat diakses oleh Admin.'});
@@ -3625,7 +4267,7 @@ function showPage(pageId) {
     }
 
     // Hide all pages
-    const pages = ['dash','pos','history','produk-terjual','produk-mgmt','inventory','cabang-mgmt','shift-mgmt','user-mgmt', 'rekap-shift'];
+    const pages = ['dash','pos','history','produk-terjual','produk-mgmt','inventory','cabang-mgmt','shift-mgmt','user-mgmt','rekap-shift','settings'];
     pages.forEach(id => {
         const el = document.getElementById('page-' + id);
         const nav = document.getElementById('nav-' + id);
@@ -3670,6 +4312,9 @@ function showPage(pageId) {
         } else {
             renderRekapShift();
         }
+    }
+    else if (pageId === 'settings') {
+        renderSettingsPage();
     }
 }
 
@@ -4588,7 +5233,67 @@ function modalBayar() {
     });
     container.innerHTML = htmlItems;
     recalcSplitTotal(); toggleCalculator();
-    new bootstrap.Modal(document.getElementById('modalBayar')).show();
+
+    // [V16] Buat PaymentSession saat modal bayar dibuka
+    _v16CreateSession();
+    const modalEl = document.getElementById('modalBayar');
+    modalEl.addEventListener('hidden.bs.modal', _v16OnModalClosed, { once: true });
+
+    new bootstrap.Modal(modalEl).show();
+}
+
+// [V16] Buat PaymentSession — dipanggil saat modal bayar terbuka
+async function _v16CreateSession() {
+    try {
+        ACTIVE_SESSION_ID = null;
+        ACTIVE_TRX_ID     = null;
+        const res = await fetch(API_URL, {
+            method: 'POST',
+            body: JSON.stringify({
+                action:  'createPaymentSession',
+                id_meja: String(AKTIF_MEJA),
+                items:   JSON.stringify(CART),
+                total:   window.CURRENT_TOTAL || 0
+            })
+        }).then(r => r.json());
+        if (res && res.status === 'success') {
+            ACTIVE_SESSION_ID = res.session_id;
+        }
+    } catch(e) {
+        console.warn('[V16] createPaymentSession gagal:', e);
+    }
+}
+
+// [V16] Dipanggil saat modal ditutup tanpa pembayaran
+async function _v16OnModalClosed() {
+    if (!ACTIVE_SESSION_ID) return;
+    try {
+        await fetch(API_URL, {
+            method: 'POST',
+            body: JSON.stringify({
+                action:     'closePaymentSession',
+                session_id: ACTIVE_SESSION_ID,
+                status:     'Cancelled'
+            })
+        });
+    } catch(e) { /* silent */ }
+    ACTIVE_SESSION_ID = null;
+    ACTIVE_TRX_ID     = null;
+}
+
+// [V16] Update field pada session aktif — fire-and-forget
+async function _v16UpdateSession(fields) {
+    if (!ACTIVE_SESSION_ID) return;
+    try {
+        await fetch(API_URL, {
+            method: 'POST',
+            body: JSON.stringify(
+                Object.assign({ action: 'updatePaymentSession', session_id: ACTIVE_SESSION_ID }, fields)
+            )
+        });
+    } catch(e) {
+        console.warn('[V16] updatePaymentSession gagal:', e);
+    }
 }
 
 function recalcSplitTotal() {
@@ -4604,11 +5309,35 @@ function recalcSplitTotal() {
 }
 
 function toggleCalculator() {
-    const isTunai = document.getElementById('m-tunai').checked;
-    const ca = document.getElementById('calc-area');
+    const met     = document.querySelector('input[name="metode"]:checked')?.value || 'Tunai';
+    const isTunai = (met === 'Tunai');
+    const isQris  = (met === 'QRIS');
+    const ca      = document.getElementById('calc-area');
     if (ca) ca.style.display = isTunai ? 'block' : 'none';
     document.getElementById('btn-konfirmasi-lunas').disabled = isTunai;
-    if (isTunai) { document.getElementById('input-bayar').value = ""; document.getElementById('display-kembalian').innerText = "Rp 0"; }
+    if (isTunai) {
+        document.getElementById('input-bayar').value = "";
+        document.getElementById('display-kembalian').innerText = "Rp 0";
+    }
+    // [V17] Update QR_URL ke PaymentSession saat metode berubah
+    if (isQris && ACTIVE_SESSION_ID) {
+        const qrUrl = (typeof _getQrisUrl === 'function') ? _getQrisUrl() : '';
+        if (qrUrl) {
+            _v16UpdateSession({ qr_url: qrUrl });
+        } else if (SettingsManager.get('qris_mode') === 'static') {
+            Swal.fire({
+                icon: 'warning',
+                title: 'URL QR QRIS Belum Diatur',
+                html: 'Silakan atur URL gambar QR QRIS di <b>Pengaturan Sistem → Pembayaran</b>.',
+                showCancelButton: true,
+                confirmButtonText: 'Buka Pengaturan',
+                cancelButtonText: 'Tutup'
+            }).then(r => { if (r.isConfirmed) showPage('settings'); });
+        }
+    }
+    if (!isQris && ACTIVE_SESSION_ID) {
+        _v16UpdateSession({ qr_url: '' });
+    }
 }
 
 function hitungKembalian() {
@@ -6757,7 +7486,9 @@ function _style(forBlob) {
 
 // ── RawBT: preferensi paper width (disimpan di localStorage) ─────────────────
 // User bisa ubah via tombol pengaturan cetak jika perlu
+// [V17] Paper width dibaca dari SettingsManager (dengan fallback ke localStorage lama)
 var _rawbtPaperWidth = (function() {
+    if (typeof SettingsManager !== 'undefined') return getPaperWidthChars();
     try { return parseInt(localStorage.getItem('rawbt_paper_width') || '42'); } catch(e) { return 42; }
 })();
 
@@ -7898,7 +8629,6 @@ async function cancelPesananMeja() {
 // =============================================================
 async function prosesBayarFinal() {
     if (!validateAdminBranch()) return;
-    // Nonaktifkan tombol konfirmasi segera agar tidak bisa diklik lagi
     const btnKonfirmasi = document.getElementById('btn-konfirmasi-lunas');
     if (btnKonfirmasi) { btnKonfirmasi.disabled = true; btnKonfirmasi.textContent = 'Memproses...'; }
     try {
@@ -7909,9 +8639,8 @@ async function prosesBayarFinal() {
         const customerName  = document.getElementById('cust-name')?.value || "Guest";
         const savedDType    = document.getElementById('disc-type').value;
         const savedDVal     = document.getElementById('disc-val').value;
-        const activeCabang  = getActiveCabang(); // FIXED
+        const activeCabang  = getActiveCabang();
 
-        // ── Generate nomor transaksi lokal (untuk ditampilkan di struk) ──
         const now = new Date();
         const pad = n => String(n).padStart(2,'0');
         const localTrxId = `TRX${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}-${activeCabang || 'X'}`;
@@ -7931,18 +8660,28 @@ async function prosesBayarFinal() {
                 status:      'Kosong',
                 kasir:       KASIR,
                 metode:      met,
-                cabang:      activeCabang // FIXED: was localStorage.getItem('user_cabang') || ''
+                cabang:      activeCabang
             })
         }).then(r => r.json());
 
-        // Simpan ID dari response backend jika tersedia
-        if (res && (res.id_transaksi || res.ID_Transaksi)) {
-            window.LAST_TRX_ID = res.id_transaksi || res.ID_Transaksi;
-        }
+        // [V16] Ambil id_transaksi dari backend (PATCH B-1)
+        const backendTrxId = (res && (res.id_transaksi || res.ID_Transaksi))
+            ? (res.id_transaksi || res.ID_Transaksi)
+            : localTrxId;
+        window.LAST_TRX_ID = backendTrxId;
+        ACTIVE_TRX_ID      = backendTrxId;
 
         if (res.status === 'success') {
-            const mInstance = bootstrap.Modal.getInstance(document.getElementById('modalBayar'));
-            if (mInstance) mInstance.hide();
+            // [V16] Catat payment + tutup session — tidak await agar cashier flow tidak terhambat
+            _v16FinalizePembayaran(backendTrxId, met, window.CURRENT_TOTAL, activeCabang);
+
+            const modalEl   = document.getElementById('modalBayar');
+            const mInstance = bootstrap.Modal.getInstance(modalEl);
+            if (mInstance) {
+                // Lepas listener cancel agar tidak trigger _v16OnModalClosed
+                modalEl.removeEventListener('hidden.bs.modal', _v16OnModalClosed);
+                mInstance.hide();
+            }
 
             Swal.fire({
                 title: 'Berhasil Lunas!',
@@ -7960,64 +8699,116 @@ async function prosesBayarFinal() {
     } catch (e) {
         Swal.fire('Gagal!', e.message, 'error');
     } finally {
-        // Re-enable tombol (jika modal masih terbuka karena error)
         if (btnKonfirmasi) { btnKonfirmasi.disabled = false; btnKonfirmasi.textContent = 'KONFIRMASI PEMBAYARAN'; }
     }
     loading(false);
+}
+
+// [V16] Catat payment + tutup session setelah prosesBayarFinal berhasil
+async function _v16FinalizePembayaran(idTrx, metode, nominal, cabang) {
+    try {
+        if (ACTIVE_SESSION_ID && idTrx) {
+            await fetch(API_URL, {
+                method: 'POST',
+                body: JSON.stringify({
+                    action:       'updatePaymentSession',
+                    session_id:   ACTIVE_SESSION_ID,
+                    id_transaksi: idTrx
+                })
+            });
+        }
+        if (idTrx) {
+            await fetch(API_URL, {
+                method: 'POST',
+                body: JSON.stringify({
+                    action:       'createPayment',
+                    id_transaksi: idTrx,
+                    id_meja:      String(AKTIF_MEJA),
+                    nominal:      nominal,
+                    metode:       metode.toLowerCase(),
+                    kasir:        KASIR,
+                    cabang:       cabang
+                })
+            });
+        }
+        if (ACTIVE_SESSION_ID) {
+            await fetch(API_URL, {
+                method: 'POST',
+                body: JSON.stringify({
+                    action:     'closePaymentSession',
+                    session_id: ACTIVE_SESSION_ID,
+                    status:     'Paid'
+                })
+            });
+        }
+    } catch(e) {
+        console.warn('[V16] _v16FinalizePembayaran gagal:', e);
+    } finally {
+        ACTIVE_SESSION_ID = null;
+        ACTIVE_TRX_ID     = null;
+    }
 }
 
 // =============================================================
 // [FIX #6] prosesSplitBill() — payload cabang via getActiveCabang()
 // =============================================================
 async function prosesSplitBill() {
-    // Lock sudah dipegang eksekusiPembayaran; nonaktifkan tombol sebagai lapisan kedua
     const btnKonfirmasi = document.getElementById('btn-konfirmasi-lunas');
     if (btnKonfirmasi) { btnKonfirmasi.disabled = true; btnKonfirmasi.textContent = 'Memproses...'; }
     try {
         const met           = document.querySelector('input[name="metode"]:checked').value;
         const checks        = document.querySelectorAll('.split-check:checked');
-        const activeCabang  = getActiveCabang(); // FIXED
+        const activeCabang  = getActiveCabang();
 
         let paidMap        = {};
         let remainingCart  = JSON.parse(JSON.stringify(CART));
 
         checks.forEach(chk => {
-            const cartIdx  = Number(chk.value);
-            const itemName = chk.dataset.name;
-            const itemPrice= Number(chk.dataset.price);
+            const cartIdx   = Number(chk.value);
+            const itemName  = chk.dataset.name;
+            const itemPrice = Number(chk.dataset.price);
             remainingCart[cartIdx].qty -= 1;
-
             if (!paidMap[itemName]) paidMap[itemName] = { nama: itemName, harga: itemPrice, qty: 0 };
             paidMap[itemName].qty += 1;
         });
 
-        remainingCart         = remainingCart.filter(i => i.qty > 0);
-        const paidItemsArray  = Object.values(paidMap);
-        const sisaTagihan     = remainingCart.reduce((acc, i) => acc + (i.harga * i.qty), 0);
-        const labelMeja       = document.getElementById('label-meja')?.innerText || "TA";
+        remainingCart        = remainingCart.filter(i => i.qty > 0);
+        const paidItemsArray = Object.values(paidMap);
+        const sisaTagihan    = remainingCart.reduce((acc, i) => acc + (i.harga * i.qty), 0);
+        const labelMeja      = document.getElementById('label-meja')?.innerText || "TA";
         const currentSplitTotal = TOTAL_SPLIT;
 
         loading(true);
         const res = await fetch(API_URL, {
             method: 'POST',
             body: JSON.stringify({
-                action:              'splitBill',
-                table:               String(AKTIF_MEJA),
-                customer:            document.getElementById('cust-name')?.value || "Guest",
-                paid_item_names:     `[SPLIT ${labelMeja}] ${paidItemsArray.map(i => i.nama).join(', ')}`,
-                paid_items_json:     JSON.stringify(paidItemsArray),
-                diskon:              window.MODAL_CURRENT_DISCOUNT,
-                amount_paid:         currentSplitTotal,
+                action:               'splitBill',
+                table:                String(AKTIF_MEJA),
+                customer:             document.getElementById('cust-name')?.value || "Guest",
+                paid_item_names:      `[SPLIT ${labelMeja}] ${paidItemsArray.map(i => i.nama).join(', ')}`,
+                paid_items_json:      JSON.stringify(paidItemsArray),
+                diskon:               window.MODAL_CURRENT_DISCOUNT,
+                amount_paid:          currentSplitTotal,
                 remaining_items_json: JSON.stringify(remainingCart),
-                metode:              met,
-                kasir:               KASIR,
-                cabang:              activeCabang // FIXED: was localStorage.getItem('user_cabang') || ''
+                metode:               met,
+                kasir:                KASIR,
+                cabang:               activeCabang
             })
         }).then(r => r.json());
 
         if (res.status === 'success') {
-            const mInstance = bootstrap.Modal.getInstance(document.getElementById('modalBayar'));
-            if (mInstance) mInstance.hide();
+            // [V16] Ambil id_transaksi split dari backend (PATCH B-6)
+            const splitTrxId = (res.id_transaksi || res.ID_Transaksi) || null;
+
+            // [V16] Catat partial payment — fire-and-forget
+            _v16RecordSplitPayment(splitTrxId, met, currentSplitTotal, sisaTagihan, remainingCart, activeCabang);
+
+            const modalEl   = document.getElementById('modalBayar');
+            const mInstance = bootstrap.Modal.getInstance(modalEl);
+            if (mInstance) {
+                modalEl.removeEventListener('hidden.bs.modal', _v16OnModalClosed);
+                mInstance.hide();
+            }
 
             printStrukSplit(paidItemsArray, currentSplitTotal, met, sisaTagihan);
 
@@ -8033,6 +8824,50 @@ async function prosesSplitBill() {
         if (btnKonfirmasi) { btnKonfirmasi.disabled = false; btnKonfirmasi.textContent = 'KONFIRMASI PEMBAYARAN'; }
     }
     loading(false);
+}
+
+// [V16] Catat partial payment + update session ke Partial
+async function _v16RecordSplitPayment(splitTrxId, metode, nominalBayar, sisaTagihan, remainingCart, cabang) {
+    try {
+        if (ACTIVE_SESSION_ID) {
+            const updatePayload = {
+                action:     'updatePaymentSession',
+                session_id: ACTIVE_SESSION_ID,
+                status:     'Partial'
+            };
+            if (splitTrxId) updatePayload.id_transaksi = splitTrxId;
+            if (remainingCart.length > 0) updatePayload.total = sisaTagihan;
+            await fetch(API_URL, { method: 'POST', body: JSON.stringify(updatePayload) });
+        }
+        if (splitTrxId) {
+            await fetch(API_URL, {
+                method: 'POST',
+                body: JSON.stringify({
+                    action:       'createPayment',
+                    id_transaksi: splitTrxId,
+                    id_meja:      String(AKTIF_MEJA),
+                    nominal:      nominalBayar,
+                    metode:       metode.toLowerCase(),
+                    kasir:        KASIR,
+                    cabang:       cabang
+                })
+            });
+        }
+        if (remainingCart.length === 0 && ACTIVE_SESSION_ID) {
+            await fetch(API_URL, {
+                method: 'POST',
+                body: JSON.stringify({
+                    action:     'closePaymentSession',
+                    session_id: ACTIVE_SESSION_ID,
+                    status:     'Paid'
+                })
+            });
+            ACTIVE_SESSION_ID = null;
+            ACTIVE_TRX_ID     = null;
+        }
+    } catch(e) {
+        console.warn('[V16] _v16RecordSplitPayment gagal:', e);
+    }
 }
 // =============================================================
 async function konfirmasiPindahMeja(mejaTujuan) {
@@ -9357,8 +10192,23 @@ document.addEventListener('DOMContentLoaded', function() {
     var IS_DISPLAY_MODE = _params.get('display') === '1';
     if (!IS_DISPLAY_MODE) return;
 
-    var POLL_MS     = 2000;
-    var PAID_TTL_MS = 6000;
+    // [V17] Baca dari SettingsManager jika tersedia, fallback ke hardcode
+    var POLL_MS     = (function() {
+        try {
+            if (typeof SettingsManager !== 'undefined') {
+                return (SettingsManager.get('display_interval') || 2) * 1000;
+            }
+        } catch(e) {}
+        return 2000;
+    })();
+    var PAID_TTL_MS = (function() {
+        try {
+            if (typeof SettingsManager !== 'undefined') {
+                return (SettingsManager.get('paid_screen_duration') || 6) * 1000;
+            }
+        } catch(e) {}
+        return 6000;
+    })();
     var MEJA_PARAM  = _params.get('meja') || null;
 
     var _lastStatus = null;
