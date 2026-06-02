@@ -2992,7 +2992,19 @@
                     <div class="col-md-6"><label class="form-label fw-bold small text-muted">NAMA CABANG <span class="text-danger">*</span></label><input type="text" id="cabang-form-nama" class="form-control" placeholder="Contoh: Lhokseumawe 01" style="border-radius:10px"></div>
                     <div class="col-md-12"><label class="form-label fw-bold small text-muted">ALAMAT LENGKAP</label><textarea id="cabang-form-alamat" class="form-control" rows="2" placeholder="Jl. T. Muda Lamkuta No. 1, Lhokseumawe, Aceh" style="border-radius:10px"></textarea></div>
                     <div class="col-md-6"><label class="form-label fw-bold small text-muted">NO. TELEPON</label><input type="text" id="cabang-form-telp" class="form-control" placeholder="08xx-xxxx-xxxx" style="border-radius:10px"></div>
-                    <div class="col-md-6"><label class="form-label fw-bold small text-muted">URL LOGO</label><input type="text" id="cabang-form-logo" class="form-control" placeholder="https://... (URL gambar logo)" style="border-radius:10px"></div>
+                    <div class="col-md-6">
+                        <label class="form-label fw-bold small text-muted">LOGO CABANG</label>
+                        <input type="file" id="cabang-form-logo-file" class="form-control" accept="image/*" style="border-radius:10px" onchange="cabangLogoUpload()">
+                        <!-- hidden: menyimpan base64 hasil upload -->
+                        <input type="hidden" id="cabang-form-logo-base64">
+                        <!-- hidden: menyimpan URL lama sebagai fallback (data lama) -->
+                        <input type="hidden" id="cabang-form-logo-url">
+                        <div id="cabang-logo-preview-wrap" class="mt-2 d-none">
+                            <img id="cabang-logo-preview-img" src="" alt="Preview Logo" style="height:56px;object-fit:contain;border:1px solid #e2e8f0;border-radius:8px;padding:4px;background:#f8fafc">
+                            <button type="button" class="btn btn-sm btn-link text-danger p-0 ms-2" onclick="cabangLogoClear()"><i class="bi bi-x-circle"></i> Hapus</button>
+                        </div>
+                        <small class="text-muted">Max 500px, dikompres otomatis. Data logo lama tetap digunakan sebagai fallback.</small>
+                    </div>
                     <div class="col-md-6"><label class="form-label fw-bold small text-muted">WARNA TEMA (HEX)</label><div class="input-group"><input type="color" id="cabang-form-warna" class="form-control" value="#0f172a" style="border-radius:10px 0 0 10px;max-width:60px"><input type="text" id="cabang-form-warna-text" class="form-control" placeholder="#0f172a" style="border-radius:0 10px 10px 0"></div></div>
                     <div class="col-md-6"><label class="form-label fw-bold small text-muted">FOOTER STRUK</label><input type="text" id="cabang-form-footer" class="form-control" placeholder="Terima kasih atas kunjungan Anda" style="border-radius:10px"></div>
                     <div class="col-md-12">
@@ -3171,6 +3183,32 @@ const SETTINGS_SCHEMA = {
     display_mode:       { default: 'auto',     type: 'select',  tab: 'display', options: ['auto','per_meja'] },
     idle_timeout:       { default: 30,         type: 'int',     tab: 'display' },
     paid_screen_duration: { default: 6,        type: 'int',     tab: 'display' },
+    // [V21] MANAJEMEN MEJA
+    meja_list:          { default: [],         type: 'array',   tab: 'table' },
+    // [V21] NOMOR ORDER
+    order_prefix:       { default: 'DB',       type: 'string',  tab: 'order' },
+    order_digit:        { default: 4,          type: 'int',     tab: 'order' },
+    order_reset_daily:  { default: true,       type: 'bool',    tab: 'order' },
+    // [V21] REGIONAL
+    timezone:           { default: 'Asia/Jakarta', type: 'select', tab: 'regional', options: ['Asia/Jakarta','Asia/Makassar','Asia/Jayapura','UTC'] },
+    // [V21] MATA UANG
+    currency_code:      { default: 'IDR',      type: 'select',  tab: 'regional', options: ['IDR','USD','MYR','SGD'] },
+    currency_symbol:    { default: 'Rp',       type: 'string',  tab: 'regional' },
+    // [V21] BRANDING CENTER
+    login_logo:         { default: '',         type: 'string',  tab: 'branding' },
+    login_title:        { default: '',         type: 'string',  tab: 'branding' },
+    login_subtitle:     { default: '',         type: 'string',  tab: 'branding' },
+    login_background:   { default: '',         type: 'string',  tab: 'branding' },
+    login_theme:        { default: 'dark',     type: 'select',  tab: 'branding', options: ['light','dark','coffee','blue','green'] },
+    sidebar_logo:       { default: '',         type: 'string',  tab: 'branding' },
+    sidebar_title:      { default: '',         type: 'string',  tab: 'branding' },
+    sidebar_subtitle:   { default: '',         type: 'string',  tab: 'branding' },
+    sidebar_theme:      { default: 'dark',     type: 'select',  tab: 'branding', options: ['light','dark','coffee','blue','green'] },
+    display_logo:       { default: '',         type: 'string',  tab: 'branding' },
+    display_brand_name: { default: '',         type: 'string',  tab: 'branding' },
+    display_tagline:    { default: '',         type: 'string',  tab: 'branding' },
+    display_background: { default: '',         type: 'string',  tab: 'branding' },
+    favicon_image:      { default: '',         type: 'string',  tab: 'branding' },
 };
 
 const SETTINGS_VERSION = 1;
@@ -3310,6 +3348,9 @@ function renderSettingsPage() {
             <li class="nav-item"><a class="nav-link fw-bold px-3 py-2" data-bs-toggle="tab" href="#stab-pos"><i class="bi bi-calculator-fill me-1"></i>POS</a></li>
             <li class="nav-item"><a class="nav-link fw-bold px-3 py-2" data-bs-toggle="tab" href="#stab-printer"><i class="bi bi-printer-fill me-1"></i>Printer</a></li>
             <li class="nav-item"><a class="nav-link fw-bold px-3 py-2" data-bs-toggle="tab" href="#stab-display"><i class="bi bi-display me-1"></i>Display</a></li>
+            <li class="nav-item"><a class="nav-link fw-bold px-3 py-2" data-bs-toggle="tab" href="#stab-table"><i class="bi bi-grid-3x3-gap-fill me-1"></i>Meja</a></li>
+            <li class="nav-item"><a class="nav-link fw-bold px-3 py-2" data-bs-toggle="tab" href="#stab-order"><i class="bi bi-hash me-1"></i>No. Order</a></li>
+            <li class="nav-item"><a class="nav-link fw-bold px-3 py-2" data-bs-toggle="tab" href="#stab-regional"><i class="bi bi-globe me-1"></i>Regional</a></li>
         </ul>
 
         <div class="tab-content">
@@ -3505,6 +3546,12 @@ function renderSettingsPage() {
                             <label class="form-label fw-bold small text-muted">FOOTER STRUK TAMBAHAN</label>
                             <textarea class="form-control font-monospace" id="s-struk_footer" rows="3" placeholder="Baris tambahan di bawah struk (opsional)" style="font-size:12px">${_esc(s.get('struk_footer'))}</textarea>
                         </div>
+                        <div class="col-12 pt-2 border-top">
+                            <button class="btn btn-outline-primary fw-bold" onclick="settingsTestPrint()" type="button">
+                                <i class="bi bi-printer me-1"></i> TEST PRINT
+                            </button>
+                            <small class="text-muted ms-2">Cetak struk dummy untuk verifikasi koneksi printer.</small>
+                        </div>
                     </div>
                 </div></div>
             </div>
@@ -3544,6 +3591,100 @@ function renderSettingsPage() {
                 </div></div>
             </div>
 
+            <!-- [V21] TAB MEJA -->
+            <div class="tab-pane fade" id="stab-table">
+                <div class="card shadow-sm border-0 rounded-3"><div class="card-body">
+                    <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+                        <span class="fw-bold small text-muted">DAFTAR MEJA</span>
+                        <div class="d-flex gap-2 flex-wrap">
+                            <button class="btn btn-sm btn-outline-secondary" onclick="settingsMejaGenerate(10)"><i class="bi bi-lightning me-1"></i>+10</button>
+                            <button class="btn btn-sm btn-outline-secondary" onclick="settingsMejaGenerate(20)"><i class="bi bi-lightning me-1"></i>+20</button>
+                            <button class="btn btn-sm btn-outline-secondary" onclick="settingsMejaGenerate(50)"><i class="bi bi-lightning me-1"></i>+50</button>
+                        </div>
+                    </div>
+                    <div id="s-meja-list" class="mb-3" style="max-height:240px;overflow-y:auto;border:1px solid #e2e8f0;border-radius:8px;padding:8px">
+                        <div class="text-muted small text-center py-2">Memuat...</div>
+                    </div>
+                    <div class="input-group">
+                        <input type="text" class="form-control" id="s-meja-input" placeholder="Nama meja baru, contoh: Meja VIP" maxlength="30">
+                        <button class="btn btn-primary" onclick="settingsMejaTambah()" type="button"><i class="bi bi-plus-lg"></i> Tambah</button>
+                    </div>
+                    <small class="text-muted">Jika daftar kosong, POS akan menggunakan Meja 1–5 secara otomatis.</small>
+                </div></div>
+            </div>
+
+            <!-- [V21] TAB NOMOR ORDER -->
+            <div class="tab-pane fade" id="stab-order">
+                <div class="card shadow-sm border-0 rounded-3"><div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-md-4">
+                            <label class="form-label fw-bold small text-muted">PREFIX</label>
+                            <input type="text" class="form-control" id="s-order_prefix" value="${_esc(s.get('order_prefix'))}" placeholder="DB" maxlength="10">
+                            <small class="text-muted">Contoh: DB, TRX, ORD</small>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label fw-bold small text-muted">JUMLAH DIGIT SEQUENCE</label>
+                            <input type="number" class="form-control" id="s-order_digit" value="${s.get('order_digit')}" min="2" max="8" step="1">
+                            <small class="text-muted">2–8 digit. Default: 4</small>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label fw-bold small text-muted">RESET HARIAN</label>
+                            <div class="form-check form-switch mt-2">
+                                <input class="form-check-input" type="checkbox" id="s-order_reset_daily" ${s.get('order_reset_daily') ? 'checked' : ''}>
+                                <label class="form-check-label" for="s-order_reset_daily">Counter kembali ke 0001 setiap hari</label>
+                            </div>
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label fw-bold small text-muted">PREVIEW FORMAT</label>
+                            <div class="font-monospace p-2 rounded" style="background:#f8fafc;border:1px solid #e2e8f0;font-size:13px" id="s-order-preview">
+                                ${_esc(s.get('order_prefix'))}-${getCurrentDateTime().replace(/[^0-9]/g,'').slice(0,8)}-0001
+                            </div>
+                        </div>
+                        <div class="col-12">
+                            <button class="btn btn-sm btn-outline-danger" onclick="settingsResetOrderCounter()" type="button"><i class="bi bi-arrow-counterclockwise me-1"></i>Reset Counter Sekarang</button>
+                        </div>
+                    </div>
+                </div></div>
+            </div>
+
+            <!-- [V21] TAB REGIONAL -->
+            <div class="tab-pane fade" id="stab-regional">
+                <div class="card shadow-sm border-0 rounded-3"><div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold small text-muted">TIMEZONE</label>
+                            <select class="form-select" id="s-timezone">
+                                <option value="Asia/Jakarta"  ${s.get('timezone')==='Asia/Jakarta'  ?'selected':''}>Asia/Jakarta (WIB, UTC+7)</option>
+                                <option value="Asia/Makassar" ${s.get('timezone')==='Asia/Makassar' ?'selected':''}>Asia/Makassar (WITA, UTC+8)</option>
+                                <option value="Asia/Jayapura" ${s.get('timezone')==='Asia/Jayapura' ?'selected':''}>Asia/Jayapura (WIT, UTC+9)</option>
+                                <option value="UTC"           ${s.get('timezone')==='UTC'           ?'selected':''}>UTC (UTC+0)</option>
+                            </select>
+                            <small class="text-muted">Digunakan untuk semua timestamp transaksi, shift, dan laporan.</small>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold small text-muted">MATA UANG</label>
+                            <select class="form-select" id="s-currency_code" onchange="settingsCurrencySync()">
+                                <option value="IDR" ${s.get('currency_code')==='IDR'?'selected':''}>IDR — Rupiah</option>
+                                <option value="USD" ${s.get('currency_code')==='USD'?'selected':''}>USD — Dollar</option>
+                                <option value="MYR" ${s.get('currency_code')==='MYR'?'selected':''}>MYR — Ringgit</option>
+                                <option value="SGD" ${s.get('currency_code')==='SGD'?'selected':''}>SGD — Singapore Dollar</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold small text-muted">SIMBOL MATA UANG</label>
+                            <input type="text" class="form-control" id="s-currency_symbol" value="${_esc(s.get('currency_symbol'))}" placeholder="Rp" maxlength="5">
+                            <small class="text-muted">Digunakan di semua tampilan harga. Contoh: Rp, $, RM, S$</small>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold small text-muted">PREVIEW HARGA</label>
+                            <div class="p-2 rounded" style="background:#f8fafc;border:1px solid #e2e8f0;font-size:14px;font-weight:700" id="s-currency-preview">
+                                ${_esc(s.get('currency_symbol'))} 25.000
+                            </div>
+                        </div>
+                    </div>
+                </div></div>
+            </div>
+
         </div>
 
         <div class="d-flex justify-content-end mt-4 gap-2 pb-4">
@@ -3558,6 +3699,208 @@ function renderSettingsPage() {
     if (dispUrlEl) {
         dispUrlEl.textContent = window.location.origin + window.location.pathname + '?display=1';
     }
+
+    // [V21] Branding Center — inject tab + pane as extension (non-destructive)
+    _brandingInjectTab();
+    // [V21] Render meja list if tab-table exists
+    settingsMejaRender();
+}
+
+// =============================================================
+// [V21] BRANDING CENTER EXTENSION
+// Dipanggil oleh renderSettingsPage() setelah render selesai.
+// Tidak menyentuh renderSettingsPage asli.
+// =============================================================
+
+function _brandingInjectTab() {
+    // --- Inject tab nav ---
+    const tabList = document.getElementById('settings-tabs');
+    if (tabList && !document.getElementById('stab-nav-branding')) {
+        const li = document.createElement('li');
+        li.className = 'nav-item';
+        li.id = 'stab-nav-branding';
+        li.innerHTML = '<a class="nav-link fw-bold px-3 py-2" data-bs-toggle="tab" href="#stab-branding"><i class="bi bi-palette-fill me-1"></i>Branding</a>';
+        tabList.appendChild(li);
+    }
+
+    // --- Inject tab pane ---
+    const tabContent = document.querySelector('#page-settings .tab-content');
+    if (tabContent && !document.getElementById('stab-branding')) {
+        const s = SettingsManager;
+        const pane = document.createElement('div');
+        pane.className = 'tab-pane fade';
+        pane.id = 'stab-branding';
+        pane.innerHTML = _brandingPaneHTML(s);
+        tabContent.appendChild(pane);
+    }
+}
+
+function _brandingPaneHTML(s) {
+    const themeOpts = ['light','dark','coffee','blue','green'];
+    const _tOpt = (val, cur) => `<option value="${val}" ${cur===val?'selected':''}>${val.charAt(0).toUpperCase()+val.slice(1)}</option>`;
+    const _themeSelect = (id, cur) => `<select class="form-select" id="${id}">${themeOpts.map(o=>_tOpt(o,cur)).join('')}</select>`;
+    const _imgPreview = (id, val) => val
+        ? `<div id="${id}-wrap" class="mt-2"><img src="${_esc(val)}" style="max-height:72px;border:1px solid #e2e8f0;border-radius:8px;padding:4px;background:#fff" onerror="this.style.display='none'"></div>`
+        : `<div id="${id}-wrap" class="mt-2 d-none"><img src="" style="max-height:72px;border:1px solid #e2e8f0;border-radius:8px;padding:4px;background:#fff"></div>`;
+
+    return `
+    <div class="row g-3">
+
+      <!-- ===== LOGIN BRANDING ===== -->
+      <div class="col-12"><h6 class="fw-bold text-primary mb-0"><i class="bi bi-box-arrow-in-right me-1"></i>Login Branding</h6><hr class="mt-1 mb-2"></div>
+
+      <div class="col-md-6">
+        <label class="form-label fw-bold small text-muted">LOGO LOGIN</label>
+        <input type="file" class="form-control" id="s-login_logo_file" accept="image/*" onchange="brandingUpload('login_logo','s-login_logo_file','s-login_logo_preview-wrap')">
+        <input type="hidden" id="s-login_logo" value="">
+        ${_imgPreview('s-login_logo_preview', s.get('login_logo'))}
+        <small class="text-muted">Max 500px, dikompres otomatis</small>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label fw-bold small text-muted">BACKGROUND LOGIN</label>
+        <input type="file" class="form-control" id="s-login_background_file" accept="image/*" onchange="brandingUpload('login_background','s-login_background_file','s-login_background_preview-wrap')">
+        <input type="hidden" id="s-login_background" value="">
+        ${_imgPreview('s-login_background_preview', s.get('login_background'))}
+      </div>
+      <div class="col-md-6">
+        <label class="form-label fw-bold small text-muted">JUDUL LOGIN</label>
+        <input type="text" class="form-control" id="s-login_title" value="${_esc(s.get('login_title'))}" placeholder="Contoh: D&amp;B Coffee POS">
+      </div>
+      <div class="col-md-6">
+        <label class="form-label fw-bold small text-muted">SUBJUDUL LOGIN</label>
+        <input type="text" class="form-control" id="s-login_subtitle" value="${_esc(s.get('login_subtitle'))}" placeholder="Contoh: Masuk untuk melanjutkan">
+      </div>
+      <div class="col-md-6">
+        <label class="form-label fw-bold small text-muted">TEMA LOGIN</label>
+        ${_themeSelect('s-login_theme', s.get('login_theme'))}
+      </div>
+
+      <!-- ===== SIDEBAR BRANDING ===== -->
+      <div class="col-12 mt-2"><h6 class="fw-bold text-primary mb-0"><i class="bi bi-layout-sidebar me-1"></i>Sidebar Branding</h6><hr class="mt-1 mb-2"></div>
+
+      <div class="col-md-6">
+        <label class="form-label fw-bold small text-muted">LOGO SIDEBAR</label>
+        <input type="file" class="form-control" id="s-sidebar_logo_file" accept="image/*" onchange="brandingUpload('sidebar_logo','s-sidebar_logo_file','s-sidebar_logo_preview-wrap')">
+        <input type="hidden" id="s-sidebar_logo" value="">
+        ${_imgPreview('s-sidebar_logo_preview', s.get('sidebar_logo'))}
+      </div>
+      <div class="col-md-6">
+        <label class="form-label fw-bold small text-muted">NAMA SIDEBAR</label>
+        <input type="text" class="form-control" id="s-sidebar_title" value="${_esc(s.get('sidebar_title'))}" placeholder="Contoh: D&amp;B Coffee">
+        <div class="mt-2">
+          <label class="form-label fw-bold small text-muted">TAGLINE SIDEBAR</label>
+          <input type="text" class="form-control" id="s-sidebar_subtitle" value="${_esc(s.get('sidebar_subtitle'))}" placeholder="Contoh: Premium POS System">
+        </div>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label fw-bold small text-muted">TEMA SIDEBAR</label>
+        ${_themeSelect('s-sidebar_theme', s.get('sidebar_theme'))}
+      </div>
+
+      <!-- ===== CUSTOMER DISPLAY BRANDING ===== -->
+      <div class="col-12 mt-2"><h6 class="fw-bold text-primary mb-0"><i class="bi bi-display me-1"></i>Customer Display Branding</h6><hr class="mt-1 mb-2"></div>
+
+      <div class="col-md-6">
+        <label class="form-label fw-bold small text-muted">LOGO DISPLAY</label>
+        <input type="file" class="form-control" id="s-display_logo_file" accept="image/*" onchange="brandingUpload('display_logo','s-display_logo_file','s-display_logo_preview-wrap')">
+        <input type="hidden" id="s-display_logo" value="">
+        ${_imgPreview('s-display_logo_preview', s.get('display_logo'))}
+      </div>
+      <div class="col-md-6">
+        <label class="form-label fw-bold small text-muted">BACKGROUND DISPLAY</label>
+        <input type="file" class="form-control" id="s-display_background_file" accept="image/*" onchange="brandingUpload('display_background','s-display_background_file','s-display_background_preview-wrap')">
+        <input type="hidden" id="s-display_background" value="">
+        ${_imgPreview('s-display_background_preview', s.get('display_background'))}
+      </div>
+      <div class="col-md-6">
+        <label class="form-label fw-bold small text-muted">NAMA BRAND DISPLAY</label>
+        <input type="text" class="form-control" id="s-display_brand_name" value="${_esc(s.get('display_brand_name'))}" placeholder="Contoh: D&amp;B Coffee Premium">
+      </div>
+      <div class="col-md-6">
+        <label class="form-label fw-bold small text-muted">TAGLINE DISPLAY</label>
+        <input type="text" class="form-control" id="s-display_tagline" value="${_esc(s.get('display_tagline'))}" placeholder="Contoh: Nikmati setiap tegukan">
+      </div>
+
+      <!-- ===== FAVICON ===== -->
+      <div class="col-12 mt-2"><h6 class="fw-bold text-primary mb-0"><i class="bi bi-star-fill me-1"></i>Favicon</h6><hr class="mt-1 mb-2"></div>
+
+      <div class="col-md-6">
+        <label class="form-label fw-bold small text-muted">FAVICON (ICO / PNG)</label>
+        <input type="file" class="form-control" id="s-favicon_image_file" accept="image/*" onchange="brandingUpload('favicon_image','s-favicon_image_file','s-favicon_image_preview-wrap')">
+        <input type="hidden" id="s-favicon_image" value="">
+        ${_imgPreview('s-favicon_image_preview', s.get('favicon_image'))}
+        <small class="text-muted">Akan diupdate otomatis saat disimpan</small>
+      </div>
+
+      <!-- ===== INFO ===== -->
+      <div class="col-12 mt-2">
+        <div class="alert alert-info py-2 px-3" style="font-size:12px">
+          <i class="bi bi-info-circle me-1"></i>
+          Jika field dikosongkan, tampilan lama (fallback bawaan) tetap digunakan. Upload gambar dikompres otomatis max 500px, kualitas 80%.
+        </div>
+      </div>
+
+    </div>`;
+}
+
+// --- Helper: image compress → base64 ---
+async function brandingCompressImage(file, maxPx, quality) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const img = new Image();
+            img.onload = () => {
+                const max = maxPx || 500;
+                let w = img.width, h = img.height;
+                if (w > max || h > max) {
+                    if (w >= h) { h = Math.round(h * max / w); w = max; }
+                    else        { w = Math.round(w * max / h); h = max; }
+                }
+                const cv = document.createElement('canvas');
+                cv.width = w; cv.height = h;
+                cv.getContext('2d').drawImage(img, 0, 0, w, h);
+                resolve(cv.toDataURL('image/jpeg', quality || 0.8));
+            };
+            img.onerror = reject;
+            img.src = e.target.result;
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+    });
+}
+
+async function brandingUpload(settingKey, fileInputId, previewWrapId) {
+    const fileInput = document.getElementById(fileInputId);
+    if (!fileInput || !fileInput.files || !fileInput.files[0]) return;
+    const file = fileInput.files[0];
+    try {
+        const b64 = await brandingCompressImage(file, 500, 0.8);
+        // Simpan ke hidden input (akan dibaca saat save)
+        const hidden = document.getElementById('s-' + settingKey);
+        if (hidden) hidden.value = b64;
+        // Preview
+        const wrap = document.getElementById(previewWrapId);
+        if (wrap) {
+            wrap.classList.remove('d-none');
+            const imgEl = wrap.querySelector('img');
+            if (imgEl) imgEl.src = b64;
+        }
+    } catch(e) {
+        console.error('[Branding] Upload gagal:', e);
+        Swal.fire({ icon: 'error', title: 'Upload Gagal', text: e.message, toast: true, position: 'top-end', timer: 3000, showConfirmButton: false });
+    }
+}
+
+// Pre-populate hidden inputs with existing saved values when tab is shown
+// (so save won't blank them out if user doesn't re-upload)
+function _brandingInitHiddenValues() {
+    const keys = ['login_logo','login_background','sidebar_logo','display_logo','display_background','favicon_image'];
+    keys.forEach(k => {
+        const hidden = document.getElementById('s-' + k);
+        if (hidden && hidden.value === '') {
+            hidden.value = SettingsManager.get(k) || '';
+        }
+    });
 }
 
 function settingsSaveAll() {
@@ -3595,13 +3938,42 @@ function settingsSaveAll() {
         display_mode:         _sVal('s-display_mode'),
         idle_timeout:         parseInt(_sVal('s-idle_timeout') || '30') || 30,
         paid_screen_duration: parseInt(_sVal('s-paid_screen_duration') || '6') || 6,
+        // [V21] Order number
+        order_prefix:       _sVal('s-order_prefix').trim() || 'DB',
+        order_digit:        parseInt(_sVal('s-order_digit') || '4') || 4,
+        order_reset_daily:  document.getElementById('s-order_reset_daily')?.checked ?? true,
+        // [V21] Regional
+        timezone:           _sVal('s-timezone') || 'Asia/Jakarta',
+        currency_code:      _sVal('s-currency_code') || 'IDR',
+        currency_symbol:    _sVal('s-currency_symbol').trim() || 'Rp',
     };
+
+    // [V21] Branding Center — merge branding fields if tab was rendered
+    _brandingInitHiddenValues();
+    const _bVal = (id) => { const el = document.getElementById(id); return el ? el.value : ''; };
+    if (document.getElementById('s-login_logo') !== null) {
+        const bFields = ['login_logo','login_background','login_title','login_subtitle','login_theme',
+                         'sidebar_logo','sidebar_title','sidebar_subtitle','sidebar_theme',
+                         'display_logo','display_background','display_brand_name','display_tagline',
+                         'favicon_image'];
+        bFields.forEach(k => {
+            const v = _bVal('s-' + k);
+            // Only overwrite if field exists in DOM (tab was rendered)
+            if (v !== '') newSettings[k] = v;
+            else if (document.getElementById('s-' + k) !== null) {
+                // Field exists but empty — keep existing saved value (don't blank it)
+                newSettings[k] = SettingsManager.get(k) || '';
+            }
+        });
+    }
 
     const ok = SettingsManager.setMany(newSettings);
     if (ok !== false) {
         if (newSettings.qris_mode === 'static' && newSettings.qris_image_url) {
             localStorage.setItem('qris_url_static', newSettings.qris_image_url);
         }
+        // [V21] Apply favicon if branding favicon was saved
+        brandingApplyFavicon(newSettings.favicon_image || SettingsManager.get('favicon_image'));
         Swal.fire({ icon: 'success', title: 'Tersimpan!', text: 'Pengaturan berhasil disimpan dan langsung aktif.', timer: 2000, showConfirmButton: false, position: 'top-end', toast: true });
     } else {
         Swal.fire('Gagal', 'Tidak dapat menyimpan pengaturan.', 'error');
@@ -3707,6 +4079,370 @@ function settingsCopyDisplayUrl() {
     navigator.clipboard?.writeText(url).then(() => {
         Swal.fire({ icon: 'success', title: 'Disalin!', timer: 1500, showConfirmButton: false, toast: true, position: 'top-end' });
     });
+}
+
+// =============================================================
+// [V21] BRANDING RUNTIME HELPERS
+// =============================================================
+
+function brandingApplyFavicon(b64) {
+    if (!b64 || !b64.startsWith('data:')) return;
+    document.querySelectorAll('link[rel="icon"],link[rel="apple-touch-icon"]').forEach(el => el.remove());
+    const fav = document.createElement('link');
+    fav.rel = 'icon'; fav.type = 'image/png'; fav.href = b64;
+    document.head.appendChild(fav);
+    const ati = document.createElement('link');
+    ati.rel = 'apple-touch-icon'; ati.href = b64;
+    document.head.appendChild(ati);
+}
+
+// Theme colour map — fallback to dark if theme not found
+const BRANDING_THEMES = {
+    light:  { bg: '#f8fafc', text: '#0f172a', accent: '#3b82f6', nav: '#ffffff', border: '#e2e8f0' },
+    dark:   { bg: '#0f172a', text: '#f1f5f9', accent: '#3b82f6', nav: '#1e293b', border: '#334155' },
+    coffee: { bg: '#1c0a00', text: '#fde8c8', accent: '#c8793a', nav: '#2e1503', border: '#6b3a1f' },
+    blue:   { bg: '#0c1a2e', text: '#e2eeff', accent: '#60a5fa', nav: '#0f2a4a', border: '#1e3a5f' },
+    green:  { bg: '#0a1f0e', text: '#dcfce7', accent: '#4ade80', nav: '#0d2e12', border: '#166534' },
+};
+
+function brandingGetTheme(name) {
+    return BRANDING_THEMES[name] || BRANDING_THEMES['dark'];
+}
+
+// Apply branding to login page elements if they exist
+function brandingApplyLogin() {
+    const logo      = SettingsManager.get('login_logo');
+    const title     = SettingsManager.get('login_title');
+    const subtitle  = SettingsManager.get('login_subtitle');
+    const bg        = SettingsManager.get('login_background');
+    const theme     = brandingGetTheme(SettingsManager.get('login_theme') || 'dark');
+
+    // Logo
+    if (logo) {
+        const logoEls = document.querySelectorAll('.login-logo, #login-logo, img[data-branding="login-logo"]');
+        logoEls.forEach(el => { el.src = logo; });
+    }
+    // Title
+    if (title) {
+        const titleEls = document.querySelectorAll('.login-title, #login-title, [data-branding="login-title"]');
+        titleEls.forEach(el => { el.textContent = title; });
+    }
+    // Subtitle
+    if (subtitle) {
+        const subEls = document.querySelectorAll('.login-subtitle, #login-subtitle, [data-branding="login-subtitle"]');
+        subEls.forEach(el => { el.textContent = subtitle; });
+    }
+    // Background
+    if (bg) {
+        const loginPage = document.getElementById('page-login') || document.querySelector('.login-page');
+        if (loginPage) loginPage.style.backgroundImage = `url('${bg}')`;
+    }
+    console.log('[Branding V21] Login branding applied.');
+}
+
+// Apply branding to sidebar if it exists
+function brandingApplySidebar() {
+    const logo     = SettingsManager.get('sidebar_logo');
+    const title    = SettingsManager.get('sidebar_title');
+    const subtitle = SettingsManager.get('sidebar_subtitle');
+
+    if (logo) {
+        const els = document.querySelectorAll('.sidebar-logo, #sidebar-logo, img[data-branding="sidebar-logo"]');
+        els.forEach(el => { el.src = logo; });
+    }
+    if (title) {
+        const els = document.querySelectorAll('.sidebar-brand-name, #sidebar-title, [data-branding="sidebar-title"]');
+        els.forEach(el => { el.textContent = title; });
+    }
+    if (subtitle) {
+        const els = document.querySelectorAll('.sidebar-brand-sub, #sidebar-subtitle, [data-branding="sidebar-subtitle"]');
+        els.forEach(el => { el.textContent = subtitle; });
+    }
+    console.log('[Branding V21] Sidebar branding applied.');
+}
+
+// Apply branding to customer display if it exists (data-branding hooks)
+function brandingApplyDisplay() {
+    const logo    = SettingsManager.get('display_logo');
+    const brand   = SettingsManager.get('display_brand_name');
+    const tagline = SettingsManager.get('display_tagline');
+    const bg      = SettingsManager.get('display_background');
+
+    if (logo) {
+        document.querySelectorAll('img[data-branding="display-logo"]').forEach(el => { el.src = logo; });
+    }
+    if (brand) {
+        document.querySelectorAll('[data-branding="display-brand"]').forEach(el => { el.textContent = brand; });
+    }
+    if (tagline) {
+        document.querySelectorAll('[data-branding="display-tagline"]').forEach(el => { el.textContent = tagline; });
+    }
+    if (bg) {
+        document.querySelectorAll('[data-branding="display-bg"]').forEach(el => { el.style.backgroundImage = `url('${bg}')`; });
+    }
+    console.log('[Branding V21] Customer Display branding applied.');
+}
+
+// Master apply — call once on DOMContentLoaded after SettingsManager.load()
+function brandingApplyAll() {
+    try {
+        const fav = SettingsManager.get('favicon_image');
+        if (fav) brandingApplyFavicon(fav);
+        brandingApplyLogin();
+        brandingApplySidebar();
+        brandingApplyDisplay();
+    } catch(e) {
+        console.warn('[Branding V21] brandingApplyAll error:', e);
+    }
+}
+
+// =============================================================
+// [V21] CURRENCY HELPER — formatCurrency(value)
+// =============================================================
+function formatCurrency(value) {
+    const sym = SettingsManager.get('currency_symbol') || 'Rp';
+    const code = SettingsManager.get('currency_code') || 'IDR';
+    const num = Math.round(Number(value) || 0);
+    let formatted;
+    if (code === 'IDR') {
+        formatted = num.toLocaleString('id-ID');
+    } else if (code === 'USD' || code === 'SGD' || code === 'MYR') {
+        formatted = (num / 100 * 100).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    } else {
+        formatted = num.toLocaleString('id-ID');
+    }
+    return sym + ' ' + formatted;
+}
+
+// =============================================================
+// [V21] TIMEZONE HELPER — getCurrentDateTime()
+// =============================================================
+function getCurrentDateTime(asDate) {
+    const tz = SettingsManager.get('timezone') || 'Asia/Jakarta';
+    const now = new Date();
+    if (asDate) {
+        // Return YYYY-MM-DD string in the target timezone
+        const parts = new Intl.DateTimeFormat('en-CA', {
+            timeZone: tz, year:'numeric', month:'2-digit', day:'2-digit'
+        }).formatToParts(now);
+        return parts.map(p => p.value).join('');
+    }
+    // Return human-readable string
+    return now.toLocaleString('id-ID', { timeZone: tz,
+        day:'2-digit', month:'2-digit', year:'numeric',
+        hour:'2-digit', minute:'2-digit', second:'2-digit', hour12: false
+    });
+}
+
+// =============================================================
+// [V21] ORDER NUMBER HELPER — generateOrderNumber()
+// =============================================================
+const ORDER_COUNTER_KEY = 'pos_order_counter';
+const ORDER_DATE_KEY    = 'pos_order_date';
+
+function generateOrderNumber() {
+    const prefix      = (SettingsManager.get('order_prefix') || 'DB').toUpperCase().trim();
+    const digit       = parseInt(SettingsManager.get('order_digit') || '4');
+    const resetDaily  = SettingsManager.get('order_reset_daily') !== false;
+
+    const todayStr = getCurrentDateTime(true); // YYYY-MM-DD in target tz
+
+    let counter = parseInt(localStorage.getItem(ORDER_COUNTER_KEY) || '0');
+    const lastDate = localStorage.getItem(ORDER_DATE_KEY) || '';
+
+    if (resetDaily && lastDate !== todayStr) {
+        counter = 0;
+    }
+    counter++;
+    localStorage.setItem(ORDER_COUNTER_KEY, String(counter));
+    localStorage.setItem(ORDER_DATE_KEY, todayStr);
+
+    const seq    = String(counter).padStart(digit, '0');
+    const datePart = todayStr.replace(/-/g, '');
+    return `${prefix}-${datePart}-${seq}`;
+}
+
+// Peek next order number without incrementing
+function peekOrderNumber() {
+    const prefix     = (SettingsManager.get('order_prefix') || 'DB').toUpperCase().trim();
+    const digit      = parseInt(SettingsManager.get('order_digit') || '4');
+    const resetDaily = SettingsManager.get('order_reset_daily') !== false;
+    const todayStr   = getCurrentDateTime(true);
+    let counter = parseInt(localStorage.getItem(ORDER_COUNTER_KEY) || '0');
+    const lastDate = localStorage.getItem(ORDER_DATE_KEY) || '';
+    if (resetDaily && lastDate !== todayStr) counter = 0;
+    const seq = String(counter + 1).padStart(digit, '0');
+    return `${prefix}-${todayStr.replace(/-/g,'')}-${seq}`;
+}
+
+// =============================================================
+// [V21] MANAJEMEN MEJA — settings tab helpers
+// =============================================================
+function settingsMejaRender() {
+    const listEl = document.getElementById('s-meja-list');
+    if (!listEl) return;
+    let list = SettingsManager.get('meja_list');
+    if (!Array.isArray(list) || list.length === 0) {
+        listEl.innerHTML = '<div class="text-muted small text-center py-2">Belum ada meja. Tambah manual atau klik +10 untuk generate otomatis.</div>';
+        return;
+    }
+    listEl.innerHTML = list.map((m, i) => `
+        <div class="d-flex align-items-center justify-content-between py-1 px-1 border-bottom" style="font-size:13px">
+            <span id="s-meja-label-${i}" class="fw-bold">${_esc(m)}</span>
+            <div class="d-flex gap-1">
+                <button class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="settingsMejaEdit(${i})" title="Edit"><i class="bi bi-pencil"></i></button>
+                <button class="btn btn-sm btn-outline-danger py-0 px-2" onclick="settingsMejaHapus(${i})" title="Hapus"><i class="bi bi-trash"></i></button>
+            </div>
+        </div>`).join('');
+}
+
+function settingsMejaTambah() {
+    const input = document.getElementById('s-meja-input');
+    const nama = (input?.value || '').trim();
+    if (!nama) return Swal.fire({ icon:'warning', title:'Nama kosong', text:'Masukkan nama meja', toast:true, position:'top-end', timer:2000, showConfirmButton:false });
+    let list = SettingsManager.get('meja_list');
+    if (!Array.isArray(list)) list = [];
+    if (list.includes(nama)) return Swal.fire({ icon:'warning', title:'Sudah ada', text:`"${nama}" sudah ada`, toast:true, position:'top-end', timer:2000, showConfirmButton:false });
+    list.push(nama);
+    SettingsManager.set('meja_list', list);
+    if (input) input.value = '';
+    settingsMejaRender();
+    _mejaUpdatePOS();
+}
+
+async function settingsMejaEdit(idx) {
+    let list = SettingsManager.get('meja_list');
+    if (!Array.isArray(list) || !list[idx]) return;
+    const { value: newName } = await Swal.fire({
+        title: 'Edit Nama Meja',
+        input: 'text',
+        inputValue: list[idx],
+        showCancelButton: true,
+        confirmButtonText: 'Simpan',
+        cancelButtonText: 'Batal',
+        inputValidator: v => !v.trim() ? 'Nama tidak boleh kosong' : undefined
+    });
+    if (!newName) return;
+    list[idx] = newName.trim();
+    SettingsManager.set('meja_list', list);
+    settingsMejaRender();
+    _mejaUpdatePOS();
+}
+
+function settingsMejaHapus(idx) {
+    let list = SettingsManager.get('meja_list');
+    if (!Array.isArray(list)) return;
+    list.splice(idx, 1);
+    SettingsManager.set('meja_list', list);
+    settingsMejaRender();
+    _mejaUpdatePOS();
+}
+
+function settingsMejaGenerate(n) {
+    let list = SettingsManager.get('meja_list');
+    if (!Array.isArray(list)) list = [];
+    const existing = new Set(list);
+    for (let i = 1; i <= n; i++) {
+        const name = `Meja ${i}`;
+        if (!existing.has(name)) { list.push(name); existing.add(name); }
+    }
+    SettingsManager.set('meja_list', list);
+    settingsMejaRender();
+    _mejaUpdatePOS();
+    Swal.fire({ icon:'success', title:`${n} meja di-generate`, toast:true, position:'top-end', timer:1500, showConfirmButton:false });
+}
+
+// Rebuild DATA.tables from meja_list for POS use
+function _mejaUpdatePOS() {
+    let list = SettingsManager.get('meja_list');
+    if (!Array.isArray(list) || list.length === 0) {
+        list = ['Meja 1','Meja 2','Meja 3','Meja 4','Meja 5'];
+    }
+    // Only inject if DATA.tables is empty or unset — don't overwrite live status
+    if (!DATA.tables || DATA.tables.length === 0) {
+        DATA.tables = list.map(m => ({ ID_Meja: m, id_meja: m, Status: 'Kosong', status: 'Kosong' }));
+        if (typeof renderMeja === 'function') renderMeja();
+    }
+}
+
+// Render meja list when tab becomes visible
+document.addEventListener('shown.bs.tab', (e) => {
+    if (e.target && e.target.getAttribute('href') === '#stab-table') {
+        settingsMejaRender();
+    }
+});
+
+// =============================================================
+// [V21] SETTINGS — Currency sync dropdown→symbol
+// =============================================================
+const _CURRENCY_SYMBOLS = { IDR:'Rp', USD:'$', MYR:'RM', SGD:'S$' };
+function settingsCurrencySync() {
+    const code = document.getElementById('s-currency_code')?.value || 'IDR';
+    const symEl = document.getElementById('s-currency_symbol');
+    if (symEl && _CURRENCY_SYMBOLS[code]) symEl.value = _CURRENCY_SYMBOLS[code];
+    const prev = document.getElementById('s-currency-preview');
+    if (prev) prev.textContent = (_CURRENCY_SYMBOLS[code] || code) + ' 25.000';
+}
+
+// =============================================================
+// [V21] SETTINGS — Reset order counter
+// =============================================================
+function settingsResetOrderCounter() {
+    localStorage.removeItem(ORDER_COUNTER_KEY);
+    localStorage.removeItem(ORDER_DATE_KEY);
+    Swal.fire({ icon:'success', title:'Counter di-reset', text:'Nomor order berikutnya akan mulai dari 0001', toast:true, position:'top-end', timer:2000, showConfirmButton:false });
+}
+
+// =============================================================
+// [V21] TEST PRINT
+// =============================================================
+function settingsTestPrint() {
+    const cabang = (typeof getCabangInfo === 'function') ? getCabangInfo() : { nama: SettingsManager.get('nama_toko') || 'D&B Coffee Premium', alamat: SettingsManager.get('alamat_toko') || '', telp:'', logo:'', footer:'' };
+    const sym = SettingsManager.get('currency_symbol') || 'Rp';
+    const now = getCurrentDateTime();
+
+    const html = `<div class="sk">
+        <div class="tc">
+            <img src="${cabang.logo || ''}" class="sk-logo" onerror="this.style.display='none'">
+            <div class="bb f11 uc" style="letter-spacing:.5px">${cabang.nama || 'D&B Coffee Premium'}</div>
+            <div class="f8" style="font-weight:700">${cabang.alamat || ''}${cabang.telp ? ' | '+cabang.telp : ''}</div>
+        </div>
+        <hr class="hrs">
+        <div class="tc f10 b" style="letter-spacing:2px;margin:4px 0">— TEST PRINT —</div>
+        <hr class="hrs">
+        <div class="f9" style="line-height:1.4">
+            <div><span class="b">TGL:</span> ${now}</div>
+            <div><span class="b">KASIR:</span> ${localStorage.getItem('user_nama') || 'Kasir'}</div>
+        </div>
+        <hr class="hrd">
+        <table>
+            <tr>
+                <td class="b f10 uc">Espresso</td>
+                <td class="tr bb f10">${sym} 20.000</td>
+            </tr>
+            <tr>
+                <td colspan="2" class="f9" style="padding-left:2px">1 x ${sym} 20.000</td>
+            </tr>
+        </table>
+        <hr class="hrd">
+        <table>
+            <tr>
+                <td class="bb f13">TOTAL</td>
+                <td class="tr bb f13">${sym} 20.000</td>
+            </tr>
+        </table>
+        <hr class="hrd">
+        <div class="tc f9 b">Printer Connection OK</div>
+        <div class="tc f8">${cabang.footer || ''}</div>
+        <div class="tc f8">Manage by @barsolutions</div>
+    </div>`;
+
+    if (typeof _doPrint === 'function') {
+        _doPrint(html);
+        Swal.fire({ icon:'success', title:'Test Print Dikirim', text:'Periksa printer Anda.', toast:true, position:'top-end', timer:2000, showConfirmButton:false });
+    } else {
+        Swal.fire('Error', 'Engine printer tidak tersedia.', 'error');
+    }
 }
 
 function _sVal(id) {
@@ -3835,6 +4571,10 @@ function safeData(raw) {
 window.onload = () => {
     // [V17] Load settings pertama kali — harus di baris paling atas
     SettingsManager.load();
+    // [V21] Apply branding from saved settings
+    brandingApplyAll();
+    // [V21] Inject meja dari settings jika DATA.tables kosong
+    _mejaUpdatePOS();
     // ---- MEDIAN.CO: Status bar & back button setup ----
     if (window.MedianBridge) {
         MedianBridge.setStatusBar('dark');
@@ -5009,7 +5749,14 @@ function renderRecentOrders() {
 // POS
 // =============================================================
 function renderMeja() {
-    document.getElementById('grid-meja').innerHTML = (DATA.tables||[]).map(m => `
+    // [V21] Gunakan DATA.tables dari backend; jika kosong, gunakan meja_list dari Settings
+    let tables = DATA.tables || [];
+    if (tables.length === 0) {
+        let list = (typeof SettingsManager !== 'undefined') ? (SettingsManager.get('meja_list') || []) : [];
+        if (!Array.isArray(list) || list.length === 0) list = ['Meja 1','Meja 2','Meja 3','Meja 4','Meja 5'];
+        tables = list.map(m => ({ ID_Meja: m, id_meja: m, Status: 'Kosong', status: 'Kosong' }));
+    }
+    document.getElementById('grid-meja').innerHTML = tables.map(m => `
         <div class="col-4 col-md-2">
             <div class="meja-card shadow-sm ${String(m.Status||m.status||"").includes("Terisi")?'terisi':''}"
                  onclick="bukaKasir('${m.ID_Meja||m.id_meja}','${m.Status||m.status||"Kosong"}')">
@@ -6219,7 +6966,7 @@ function renderCabangMgmt() {
         const nama   = b.Nama_Cabang   || b.nama_cabang   || id; 
         const alamat = b.Alamat        || b.alamat        || '-';
         const telp   = b.Telepon       || b.telepon       || '-';
-        const logo   = b.Logo          || b.logo          || '';
+        const logo   = b.Logo_Base64   || b.logo_base64   || b.Logo || b.logo || '';
         const footer = b.Footer_Struk  || b.footer_struk  || 'Terima kasih atas kunjungan Anda';
         const warna  = b.Warna_Tema    || b.warna_tema    || ''; 
         const gradient = warna ? `linear-gradient(135deg,${warna},${warna}99)` : gradients[i % gradients.length];
@@ -6277,9 +7024,15 @@ function renderCabangMgmt() {
 }
 
 function modalTambahCabang() {
-    ['cabang-form-id-lama','cabang-form-id','cabang-form-nama','cabang-form-alamat','cabang-form-telp','cabang-form-logo','cabang-form-footer'].forEach(id => {
+    ['cabang-form-id-lama','cabang-form-id','cabang-form-nama','cabang-form-alamat','cabang-form-telp','cabang-form-footer'].forEach(id => {
         const el = document.getElementById(id); if(el) el.value = '';
     });
+    // [V21] Reset logo fields
+    const b64El  = document.getElementById('cabang-form-logo-base64'); if(b64El)  b64El.value = '';
+    const urlEl  = document.getElementById('cabang-form-logo-url');    if(urlEl)  urlEl.value = '';
+    const fileEl = document.getElementById('cabang-form-logo-file');   if(fileEl) fileEl.value = '';
+    const wrap   = document.getElementById('cabang-logo-preview-wrap');
+    if(wrap) wrap.classList.add('d-none');
     document.getElementById('cabang-form-warna').value = '#0f172a';
     document.getElementById('cabang-form-warna-text').value = '#0f172a';
     document.getElementById('modal-cabang-title').innerText = 'Tambah Cabang Baru';
@@ -6296,11 +7049,25 @@ function modalEditCabang(id, nama) {
     document.getElementById('cabang-form-nama').value    = branch.Nama_Cabang || branch.nama_cabang || '';
     document.getElementById('cabang-form-alamat').value  = branch.Alamat || branch.alamat || '';
     document.getElementById('cabang-form-telp').value    = branch.Telepon || branch.telepon || '';
-    document.getElementById('cabang-form-logo').value    = branch.Logo || branch.logo || '';
     document.getElementById('cabang-form-footer').value  = branch.Footer_Struk || branch.footer_struk || '';
     const warna = branch.Warna_Tema || branch.warna_tema || '#0f172a';
     document.getElementById('cabang-form-warna').value      = warna;
     document.getElementById('cabang-form-warna-text').value = warna;
+    // [V21] Logo: base64 baru diutamakan, URL lama sebagai fallback
+    const logoB64 = branch.Logo_Base64 || branch.logo_base64 || '';
+    const logoUrl = branch.Logo        || branch.logo        || '';
+    const b64El  = document.getElementById('cabang-form-logo-base64'); if(b64El)  b64El.value = logoB64;
+    const urlEl  = document.getElementById('cabang-form-logo-url');    if(urlEl)  urlEl.value = logoUrl;
+    const fileEl = document.getElementById('cabang-form-logo-file');   if(fileEl) fileEl.value = '';
+    const existingLogo = logoB64 || logoUrl;
+    const wrap = document.getElementById('cabang-logo-preview-wrap');
+    const img  = document.getElementById('cabang-logo-preview-img');
+    if (existingLogo && wrap && img) {
+        img.src = existingLogo;
+        wrap.classList.remove('d-none');
+    } else if (wrap) {
+        wrap.classList.add('d-none');
+    }
     document.getElementById('modal-cabang-title').innerText = `Edit Cabang: ${nama}`;
     const idEl = document.getElementById('cabang-form-id');
     if (idEl) idEl.readOnly = true;
@@ -6313,7 +7080,10 @@ async function simpanCabang() {
     const nama    = document.getElementById('cabang-form-nama').value.trim();
     const alamat  = document.getElementById('cabang-form-alamat').value.trim();
     const telp    = document.getElementById('cabang-form-telp').value.trim();
-    const logo    = document.getElementById('cabang-form-logo').value.trim();
+    // [V21] logo_base64 diutamakan; fallback ke logo_url (data lama)
+    const logoB64 = (document.getElementById('cabang-form-logo-base64')?.value || '').trim();
+    const logoUrl = (document.getElementById('cabang-form-logo-url')?.value    || '').trim();
+    const logo    = logoB64 || logoUrl;
     const warna   = document.getElementById('cabang-form-warna-text').value.trim() || document.getElementById('cabang-form-warna').value;
     const footer  = document.getElementById('cabang-form-footer').value.trim() || 'Terima kasih atas kunjungan Anda';
 
@@ -6323,7 +7093,10 @@ async function simpanCabang() {
     try {
         const res = await fetch(API_URL, { method:"POST", body: JSON.stringify({
             action: idLama ? 'updateBranch' : 'addBranch',
-            id_lama: idLama, id, nama, alamat, telp, logo, warna, footer
+            id_lama: idLama, id, nama, alamat, telp,
+            logo,          // untuk kompatibilitas backend lama
+            logo_base64: logoB64, // field baru — backend bisa menyimpan terpisah
+            warna, footer
         })}).then(r => r.json());
         if (res.status === 'success') {
             bootstrap.Modal.getInstance(document.getElementById('modalCabangForm')).hide();
@@ -6346,6 +7119,31 @@ async function hapusCabang(id) {
         else { Swal.fire('Gagal',res.message||'Cabang tidak ditemukan','error'); }
     } catch(e) { Swal.fire('Error','Gagal terhubung','error'); }
     loading(false);
+}
+
+// [V21] Upload logo cabang — gunakan helper yang sama dengan Branding Center
+async function cabangLogoUpload() {
+    const fileInput = document.getElementById('cabang-form-logo-file');
+    if (!fileInput || !fileInput.files || !fileInput.files[0]) return;
+    try {
+        const b64 = await brandingCompressImage(fileInput.files[0], 500, 0.8);
+        const hidden = document.getElementById('cabang-form-logo-base64');
+        if (hidden) hidden.value = b64;
+        const wrap = document.getElementById('cabang-logo-preview-wrap');
+        const img  = document.getElementById('cabang-logo-preview-img');
+        if (wrap && img) { img.src = b64; wrap.classList.remove('d-none'); }
+    } catch(e) {
+        console.error('[Cabang Logo] Upload gagal:', e);
+        Swal.fire({ icon:'error', title:'Upload Gagal', text: e.message, toast:true, position:'top-end', timer:3000, showConfirmButton:false });
+    }
+}
+
+function cabangLogoClear() {
+    const b64El  = document.getElementById('cabang-form-logo-base64'); if(b64El)  b64El.value = '';
+    const urlEl  = document.getElementById('cabang-form-logo-url');    if(urlEl)  urlEl.value = '';
+    const fileEl = document.getElementById('cabang-form-logo-file');   if(fileEl) fileEl.value = '';
+    const wrap   = document.getElementById('cabang-logo-preview-wrap');
+    if(wrap) wrap.classList.add('d-none');
 }
 
 // Color sync for cabang form
@@ -7274,7 +8072,7 @@ function modalKasMasuk()  { new bootstrap.Modal(document.getElementById('modalKa
 // getCabangInfo: see fixed version below
 
 const _rp  = n => Math.round(n).toLocaleString('id-ID');
-const _tgl = () => new Date().toLocaleString('id-ID', {
+const _tgl = () => (typeof getCurrentDateTime === 'function') ? getCurrentDateTime() : new Date().toLocaleString('id-ID', {
     day:'2-digit', month:'2-digit', year:'numeric',
     hour:'2-digit', minute:'2-digit', hour12:false
 });
@@ -8643,7 +9441,10 @@ async function prosesBayarFinal() {
 
         const now = new Date();
         const pad = n => String(n).padStart(2,'0');
-        const localTrxId = `TRX${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}-${activeCabang || 'X'}`;
+        // [V21] Gunakan generateOrderNumber jika tersedia, fallback ke format lama
+        const localTrxId = (typeof generateOrderNumber === 'function')
+            ? generateOrderNumber()
+            : `TRX${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}-${activeCabang || 'X'}`;
         window.LAST_TRX_ID = localTrxId;
 
         loading(true);
