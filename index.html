@@ -3145,7 +3145,7 @@
 // GLOBAL STATE
 // =============================================================
 // [V17] API_URL dikelola oleh SettingsManager — jangan hardcode
-let API_URL = 'https://script.google.com/macros/s/AKfycbxrntrej6w48p5p8ff4I_pU9WdhDS6_Bqi--7HXFoFTkiaimQ8tUyAVjBAELeIvWCB1/exec';
+let API_URL = 'https://script.google.com/macros/s/AKfycby0hD6fttq8jn9WVdnNXExIX291MGQ-6sY0Y8O5L1xtMH5eP6ZrNWCI5M2Jc8cWRukf/exec';
 let DATA = { products:[], tables:[], history:[], expenses:[], modal:[], users:[], branches:[], shifts:[], absenLog:[], rekapShift:[] };
 let CART = [], AKTIF_MEJA = "", KASIR = "", TOTAL_CART = 0;
 // [V16] PaymentSession state
@@ -4156,8 +4156,13 @@ async function settingsUploadQrisImage() {
             localStorage.removeItem('qris_url_static');
             if (statusEl) { statusEl.textContent = '✓ Upload berhasil! File ID: ' + result.file_id.substring(0,20) + '…'; statusEl.className = 'small text-success mb-2'; }
             Swal.fire({ icon: 'success', title: 'Upload Berhasil!', text: 'Gambar QRIS berhasil disimpan ke Google Drive.', timer: 2500, showConfirmButton: false, toast: true, position: 'top-end' });
-            // Re-render settings panel to show updated state
-            setTimeout(() => { const tab = document.querySelector('[href="#stab-payment"]'); if (tab) tab.click(); renderSettingsPanel?.(); }, 500);
+            // Re-render settings panel dengan data terbaru
+            setTimeout(() => {
+                if (typeof renderSettingsPage === 'function') renderSettingsPage();
+                // Aktifkan kembali tab Payment
+                const payTab = document.querySelector('[href="#stab-payment"]');
+                if (payTab) setTimeout(() => payTab.click(), 100);
+            }, 400);
         } else {
             throw new Error(result.message || 'Upload gagal');
         }
@@ -4188,7 +4193,11 @@ async function settingsDeleteQrisImage() {
     }
     SettingsManager.set('qris_file_id', '');
     Swal.fire({ icon:'success', title:'Dihapus', timer:1500, showConfirmButton:false, toast:true, position:'top-end' });
-    setTimeout(() => renderSettingsPanel?.(), 300);
+    setTimeout(() => {
+        if (typeof renderSettingsPage === 'function') renderSettingsPage();
+        const payTab = document.querySelector('[href="#stab-payment"]');
+        if (payTab) setTimeout(() => payTab.click(), 100);
+    }, 300);
 }
 
 function settingsCopyDisplayUrl() {
@@ -5324,6 +5333,15 @@ async function refreshData() {
         DATA.absenLog  = res.absenLog  || res.absen_log  || DATA.absenLog || [];
         // Rekap Shift: coba semua kemungkinan nama field dari backend
         DATA.rekapShift = res.rekapShift || res.rekap_shift || res.shiftClosing || res.shift_closing || res.rekap || DATA.rekapShift || [];
+
+        // Sync appSettings dari server (termasuk QRIS_FILE_ID)
+        if (res.appSettings && typeof res.appSettings === 'object') {
+            const srvQrisFileId = (res.appSettings['QRIS_FILE_ID'] || '').toString().trim();
+            if (srvQrisFileId) {
+                // Server punya file_id → jadikan sumber kebenaran
+                SettingsManager.set('qris_file_id', srvQrisFileId);
+            }
+        }
 
         // Rebuild cabang filter dropdown for admin
         buildCabangFilterDropdown();
@@ -11664,6 +11682,18 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         var qrUrl     = (d.qr_url||'').toString().trim();
+        // Fallback: jika qr_url kosong tapi ada qris_file_id dari server (static QRIS),
+        // bangun thumbnail URL dari Drive file_id
+        if (!qrUrl) {
+            var dispFileId = (d.qris_file_id || '').toString().trim();
+            if (!dispFileId) {
+                // Coba dari SettingsManager (sync saat refresh)
+                dispFileId = (typeof SettingsManager !== 'undefined' ? SettingsManager.get('qris_file_id') : '') || '';
+            }
+            if (dispFileId) {
+                qrUrl = 'https://drive.google.com/thumbnail?id=' + dispFileId + '&sz=w400';
+            }
+        }
         var qrPanel   = document.getElementById('disp-qr-panel');
         var noQrPanel = document.getElementById('disp-noqr-panel');
 
