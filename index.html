@@ -481,9 +481,14 @@
             const isPost = opts.method && opts.method.toUpperCase() === 'POST';
             let fixedOpts = Object.assign({}, opts);
             if (isPost) {
+                // [V23 FIX] text/plain HARUS menang agar tidak ada preflight CORS
+                // Hapus Content-Type dari opts.headers sebelum merge
+                const safeHeaders = Object.assign({}, opts.headers || {});
+                delete safeHeaders['Content-Type'];
+                delete safeHeaders['content-type'];
                 fixedOpts.headers = Object.assign(
                     { 'Content-Type': 'text/plain;charset=UTF-8' },
-                    opts.headers || {}
+                    safeHeaders
                 );
             }
 
@@ -3166,6 +3171,7 @@ const SETTINGS_SCHEMA = {
     display_interval:   { default: 2,                                     type: 'int',    tab: 'backend' },
     qris_mode:          { default: 'static',   type: 'select',  tab: 'payment', options: ['static','dynamic'] },
     qris_image_url:     { default: '',         type: 'string',  tab: 'payment' },
+    qris_file_id:       { default: '',         type: 'string',  tab: 'payment' },
     payment_gateway:    { default: 'none',     type: 'select',  tab: 'payment', options: ['none','tripay','midtrans','xendit','duitku'] },
     merchant_code:      { default: '',         type: 'string',  tab: 'payment' },
     api_key:            { default: '',         type: 'password',tab: 'payment' },
@@ -3317,6 +3323,14 @@ const SettingsManager = {
     }
 };
 
+// Helper: bangun URL thumbnail Drive dari file_id, fallback ke URL lama
+function _buildQrisDriveUrl(fileId, fallbackUrl) {
+    if (fileId && fileId.trim()) {
+        return 'https://drive.google.com/thumbnail?id=' + fileId.trim() + '&sz=w400';
+    }
+    return fallbackUrl || '';
+}
+
 function renderSettingsPage() {
     const s = SettingsManager;
     const el = document.getElementById('page-settings');
@@ -3429,13 +3443,23 @@ function renderSettingsPage() {
                             </select>
                         </div>
                         <div class="col-12" id="s-qris-static-group" style="display:${s.get('qris_mode')==='static'?'block':'none'}">
-                            <label class="form-label fw-bold small text-muted">QRIS IMAGE URL (Static)</label>
-                            <div class="input-group">
-                                <input type="url" class="form-control" id="s-qris_image_url" value="${_esc(s.get('qris_image_url'))}" placeholder="https://... (URL gambar QR code merchant)">
-                                <button class="btn btn-outline-secondary" onclick="settingsPreviewQris()" type="button"><i class="bi bi-eye"></i> Preview</button>
-                            </div>
-                            <div id="s-qris-preview" class="mt-2 text-center ${s.get('qris_image_url') ? '' : 'd-none'}">
-                                <img src="${_esc(s.get('qris_image_url'))}" style="max-height:160px;border:1px solid #e2e8f0;border-radius:8px;padding:6px" onerror="this.style.display='none'">
+                            <label class="form-label fw-bold small text-muted">QRIS IMAGE (Static)</label>
+                            <div class="d-flex align-items-center gap-3 flex-wrap">
+                                <div id="s-qris-preview" class="text-center ${(s.get('qris_file_id') || s.get('qris_image_url')) ? '' : 'd-none'}" style="flex:0 0 auto">
+                                    <img id="s-qris-preview-img" src="${_esc(_buildQrisDriveUrl(s.get('qris_file_id'), s.get('qris_image_url')))}" style="max-height:140px;max-width:140px;border:1px solid #e2e8f0;border-radius:8px;padding:4px" onerror="this.style.display='none'">
+                                </div>
+                                <div style="flex:1;min-width:200px">
+                                    <div class="mb-2">
+                                        <input type="file" class="form-control" id="s-qris_file_input" accept="image/png,image/jpeg,image/jpg,image/webp" onchange="settingsPreviewQrisFile(this)">
+                                        <small class="text-muted">PNG/JPG/WebP maks 2MB. Gambar disimpan ke Google Drive.</small>
+                                    </div>
+                                    <div id="s-qris-upload-status" class="small mb-2" style="display:none"></div>
+                                    <div class="d-flex gap-2 flex-wrap">
+                                        <button class="btn btn-primary btn-sm fw-bold" onclick="settingsUploadQrisImage()" id="s-qris-upload-btn" style="display:none"><i class="bi bi-cloud-upload me-1"></i>Upload ke Drive</button>
+                                        ${s.get('qris_file_id') ? `<button class="btn btn-outline-danger btn-sm" onclick="settingsDeleteQrisImage()"><i class="bi bi-trash me-1"></i>Hapus Gambar</button>` : ''}
+                                    </div>
+                                    ${s.get('qris_file_id') ? `<div class="text-muted mt-1" style="font-size:10px">File ID: <span class="font-monospace">${_esc(s.get('qris_file_id').substring(0,20))}…</span></div>` : ''}
+                                </div>
                             </div>
                         </div>
                         <div class="col-12" id="s-qris-dynamic-group" style="display:${s.get('qris_mode')==='dynamic'?'block':'none'}">
@@ -3920,7 +3944,8 @@ function settingsSaveAll() {
         spreadsheet_id:    _sVal('s-spreadsheet_id'),
         display_interval:  parseInt(_sVal('s-display_interval') || '2') || 2,
         qris_mode:         _sVal('s-qris_mode'),
-        qris_image_url:    _sVal('s-qris_image_url'),
+        qris_image_url:    SettingsManager.get('qris_image_url'), // preserve legacy; only changed via upload
+        qris_file_id:      SettingsManager.get('qris_file_id'),   // only changed via upload/delete
         payment_gateway:   _sVal('s-payment_gateway'),
         merchant_code:     _sVal('s-merchant_code'),
         api_key:           _sVal('s-api_key'),
@@ -4064,14 +4089,106 @@ function settingsPreviewLogo() {
     wrap.querySelector('img').src = url;
 }
 
-function settingsPreviewQris() {
-    const url  = document.getElementById('s-qris_image_url')?.value;
-    const wrap = document.getElementById('s-qris-preview');
-    if (!wrap) return;
-    if (!url) { wrap.classList.add('d-none'); return; }
-    wrap.classList.remove('d-none');
-    wrap.querySelector('img').src = url;
-    wrap.querySelector('img').style.display = 'block';
+function settingsPreviewQrisFile(input) {
+    const file = input?.files?.[0];
+    const uploadBtn = document.getElementById('s-qris-upload-btn');
+    const statusEl  = document.getElementById('s-qris-upload-status');
+    const previewWrap = document.getElementById('s-qris-preview');
+    const previewImg  = document.getElementById('s-qris-preview-img');
+    if (!file) {
+        if (uploadBtn) uploadBtn.style.display = 'none';
+        return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+        Swal.fire('File Terlalu Besar', 'Ukuran gambar maksimal 2MB.', 'warning');
+        input.value = '';
+        return;
+    }
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        if (previewImg) { previewImg.src = e.target.result; previewImg.style.display = 'block'; }
+        if (previewWrap) previewWrap.classList.remove('d-none');
+        if (uploadBtn) uploadBtn.style.display = '';
+        if (statusEl) { statusEl.textContent = 'Siap diupload. Klik "Upload ke Drive" untuk menyimpan.'; statusEl.className = 'small text-info mb-2'; statusEl.style.display = ''; }
+    };
+    reader.readAsDataURL(file);
+}
+
+async function settingsUploadQrisImage() {
+    const input    = document.getElementById('s-qris_file_input');
+    const statusEl = document.getElementById('s-qris-upload-status');
+    const uploadBtn = document.getElementById('s-qris-upload-btn');
+    const file = input?.files?.[0];
+    if (!file) { Swal.fire('Pilih Gambar', 'Pilih file gambar terlebih dahulu.', 'warning'); return; }
+
+    const apiUrl = SettingsManager.get('api_url');
+    if (!apiUrl) { Swal.fire('API URL Kosong', 'Atur API URL di tab Sistem terlebih dahulu.', 'warning'); return; }
+
+    if (statusEl) { statusEl.textContent = 'Mengupload ke Google Drive…'; statusEl.className = 'small text-warning mb-2'; statusEl.style.display = ''; }
+    if (uploadBtn) { uploadBtn.disabled = true; uploadBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Uploading…'; }
+
+    try {
+        const base64Full = await new Promise((res, rej) => {
+            const r = new FileReader();
+            r.onload  = () => res(r.result);
+            r.onerror = () => rej(new Error('Gagal membaca file'));
+            r.readAsDataURL(file);
+        });
+        const base64 = base64Full.split(',')[1];
+        const oldFileId = SettingsManager.get('qris_file_id') || '';
+
+        const resp = await fetch(apiUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action:       'uploadQrisImage',
+                base64:       base64,
+                mime_type:    file.type,
+                file_name:    'qris_static_' + Date.now() + '.' + file.name.split('.').pop(),
+                old_file_id:  oldFileId
+            })
+        });
+        const result = await resp.json();
+
+        if (result.status === 'success' && result.file_id) {
+            SettingsManager.set('qris_file_id', result.file_id);
+            SettingsManager.set('qris_image_url', ''); // clear legacy URL
+            localStorage.removeItem('qris_url_static');
+            if (statusEl) { statusEl.textContent = '✓ Upload berhasil! File ID: ' + result.file_id.substring(0,20) + '…'; statusEl.className = 'small text-success mb-2'; }
+            Swal.fire({ icon: 'success', title: 'Upload Berhasil!', text: 'Gambar QRIS berhasil disimpan ke Google Drive.', timer: 2500, showConfirmButton: false, toast: true, position: 'top-end' });
+            // Re-render settings panel to show updated state
+            setTimeout(() => { const tab = document.querySelector('[href="#stab-payment"]'); if (tab) tab.click(); renderSettingsPanel?.(); }, 500);
+        } else {
+            throw new Error(result.message || 'Upload gagal');
+        }
+    } catch(e) {
+        if (statusEl) { statusEl.textContent = '✗ Gagal: ' + e.message; statusEl.className = 'small text-danger mb-2'; }
+        Swal.fire('Upload Gagal', e.message, 'error');
+    } finally {
+        if (uploadBtn) { uploadBtn.disabled = false; uploadBtn.innerHTML = '<i class="bi bi-cloud-upload me-1"></i>Upload ke Drive'; }
+    }
+}
+
+async function settingsDeleteQrisImage() {
+    const fileId = SettingsManager.get('qris_file_id');
+    if (!fileId) return;
+    const confirm = await Swal.fire({
+        icon: 'warning', title: 'Hapus Gambar QRIS?',
+        text: 'Gambar akan dihapus dari Google Drive dan tidak bisa digunakan di pembayaran.',
+        showCancelButton: true, confirmButtonText: 'Hapus', cancelButtonText: 'Batal',
+        confirmButtonColor: '#ef4444'
+    });
+    if (!confirm.isConfirmed) return;
+    const apiUrl = SettingsManager.get('api_url');
+    if (apiUrl) {
+        try {
+            await fetch(apiUrl, { method:'POST', headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({ action:'deleteQrisImage', file_id: fileId }) });
+        } catch(e) {}
+    }
+    SettingsManager.set('qris_file_id', '');
+    Swal.fire({ icon:'success', title:'Dihapus', timer:1500, showConfirmButton:false, toast:true, position:'top-end' });
+    setTimeout(() => renderSettingsPanel?.(), 300);
 }
 
 function settingsCopyDisplayUrl() {
@@ -4466,6 +4583,11 @@ function _getQrisUrl() {
         if (inputEl && inputEl.value.trim()) return inputEl.value.trim();
         return '';
     }
+    // Prioritas: file_id dari Drive → legacy qris_image_url → localStorage
+    const fileId = SettingsManager.get('qris_file_id');
+    if (fileId && fileId.trim()) {
+        return 'https://drive.google.com/thumbnail?id=' + fileId.trim() + '&sz=w400';
+    }
     return SettingsManager.get('qris_image_url') || localStorage.getItem('qris_url_static') || '';
 }
 
@@ -4654,6 +4776,11 @@ function initMainApp() {
     refreshData();
     // ── AUTO-RESET HARIAN: aktifkan kembali semua shift di hari baru ──
     dailyShiftReset().catch(() => {});
+    // [V27] Periodic cleanup session expired setiap 30 menit
+    setInterval(function() {
+        fetch(API_URL, { method: 'POST', body: JSON.stringify({ action: 'cleanupExpiredSessions' }) })
+            .catch(function(){});
+    }, 30 * 60 * 1000);
 }
 
 // =============================================================
@@ -4809,7 +4936,6 @@ async function konfirmasiAbsen() {
     if (!acquireSubmitLock('absen')) return; // ← GUARD
     const modalAwal = Number(document.getElementById('absen-modal-awal').value) || 0;
     const shiftNamaEl = document.getElementById('absen-shift-nama').innerText || '';
-    // Cari nama shift lengkap dari DATA.shifts agar terkoneksi akurat
     const matchedShift = (DATA.shifts||[]).find(s => {
         const sn = (s.Nama_Shift || s.nama_shift || '').trim();
         return sn === shiftNamaEl.trim() || (ACTIVE_SHIFT && (s.ID_Shift||s.id_shift) === (ACTIVE_SHIFT.ID_Shift||ACTIVE_SHIFT.id_shift));
@@ -4824,7 +4950,6 @@ async function konfirmasiAbsen() {
         const userNama = localStorage.getItem('user_nama') || KASIR || '-';
         const sekarang = new Date();
 
-        // Perbaikan: Hilangkan pengecekan Utilities (tidak ada di browser)
         const waktuMulaiFormatted = sekarang.toLocaleTimeString('id-ID', {
             hour: '2-digit',
             minute: '2-digit',
@@ -4838,14 +4963,13 @@ async function konfirmasiAbsen() {
         localStorage.setItem('shift_jam_start', waktuMulaiFormatted);
         localStorage.setItem('shift_start_iso', sekarang.toISOString());
 
-        // Simpan jam_mulai & jam_selesai shift untuk keperluan auto-reaktivasi
         if (matchedShift) {
             localStorage.setItem('shift_jam_mulai', cleanTime(matchedShift.Jam_Mulai || matchedShift.jam_mulai || '00:00'));
             localStorage.setItem('shift_jam_selesai', cleanTime(matchedShift.Jam_Selesai || matchedShift.jam_selesai || '23:59'));
         }
 
-        // Kirim Absen Masuk
-        await fetch(API_URL, {
+        // [BUG FIX] Tambah Content-Type + cek response
+        const resAbsen = await fetch(API_URL, {
             method: 'POST',
             body: JSON.stringify({
                 action: 'saveAbsen',
@@ -4856,17 +4980,18 @@ async function konfirmasiAbsen() {
                 modal_awal: modalAwal,
                 status: 'Masuk'
             })
-        });
+        }).then(r => r.json());
 
-        // Tutup modal absen
+        if (!resAbsen || resAbsen.status !== 'success') {
+            throw new Error(resAbsen?.message || resAbsen?.error || 'saveAbsen gagal — absen tidak tercatat di server.');
+        }
+
         document.getElementById('absen-page').style.display = 'none';
 
-        // Tandai absen sudah dilakukan hari ini
         const todayStr = new Date().toLocaleDateString('en-CA');
         localStorage.setItem('shift_absen_done', 'true');
         localStorage.setItem('shift_absen_date', todayStr);
 
-        // Inisialisasi tampilan utama agar tidak blank
         initMainApp();
        
         Swal.fire({
@@ -4876,11 +5001,15 @@ async function konfirmasiAbsen() {
             timer: 1500,
             showConfirmButton: false
         }).then(() => {
-            showPage('pos'); // atau 'dash' jika mau ke dashboard
+            showPage('pos');
         });
 
     } catch (e) {
         console.error(e);
+        // [BUG FIX] Rollback localStorage jika API gagal
+        ['shift_modal_awal','shift_nama','shift_id','shift_jam_start','shift_start_iso',
+         'shift_jam_mulai','shift_jam_selesai','shift_absen_done','shift_absen_date']
+            .forEach(k => localStorage.removeItem(k));
         Swal.fire('Error', 'Gagal memulai shift: ' + (e.message || e), 'error');
     } finally {
         releaseSubmitLock('absen');
@@ -5026,32 +5155,37 @@ function showPage(pageId) {
         }, 100);
     } 
     else if (pageId === 'history') {
+        // [V23 FIX] Tampil data lokal dulu (optimistic), lalu refresh dari server
         renderHistory();
+        // Refresh dengan delay kecil untuk beri GAS waktu commit jika baru bayar
+        setTimeout(() => refreshData().then(() => renderHistory()), 500);
     }
     else if (pageId === 'produk-terjual') {
         hitungProdukTerjual();
+        refreshData().then(() => hitungProdukTerjual());
     }
     else if (pageId === 'produk-mgmt') {
         renderProdukManajemen();
+        refreshData().then(() => renderProdukManajemen());
     }
     else if (pageId === 'inventory') {
         renderInventory();
+        refreshData().then(() => renderInventory());
     }
     else if (pageId === 'cabang-mgmt') {
         renderCabangMgmt();
+        refreshData().then(() => renderCabangMgmt());
     }
     else if (pageId === 'shift-mgmt') {
         renderShiftMgmt();
+        refreshData().then(() => renderShiftMgmt());
     }
     else if (pageId === 'user-mgmt') {
         renderUserMgmt();
+        refreshData().then(() => renderUserMgmt());
     }
     else if (pageId === 'rekap-shift') {
-        if (!DATA.rekapShift || DATA.rekapShift.length === 0) {
-            refreshData().then(() => renderRekapShift());
-        } else {
-            renderRekapShift();
-        }
+        refreshData().then(() => renderRekapShift());
     }
     else if (pageId === 'settings') {
         renderSettingsPage();
@@ -5066,19 +5200,130 @@ function showPage(pageId) {
 async function refreshData() {
     loading(true);
     try {
-        const r = await fetch(API_URL, { method:"POST", body: JSON.stringify({action:'getAppData'}) });
-        const res = await r.json();
+        const r = await fetch(API_URL, { method: 'POST', body: JSON.stringify({ action: 'getAppData' }) });
+        // [V23 FIX] GAS kadang mengembalikan plain text atau redirect, bukan JSON
+        // Cek Content-Type sebelum .json() agar tidak crash
+        let res;
+        try {
+            const text = await r.text();
+            // GAS mengembalikan JSON valid meskipun kadang ada BOM atau spasi di depan
+            const cleaned = text.replace(/^\uFEFF/, '').trim();
+            if (!cleaned.startsWith('{') && !cleaned.startsWith('[')) {
+                throw new Error('Response bukan JSON: ' + cleaned.substring(0, 120));
+            }
+            res = JSON.parse(cleaned);
+        } catch(parseErr) {
+            console.error('[refreshData] Parse JSON gagal:', parseErr.message);
+            throw parseErr;
+        }
         DATA.products  = res.products  || [];
         DATA.tables    = res.tables    || res.meja || [];
-        DATA.history   = res.history   || [];
-        DATA.expenses  = res.expenses  || [];
-        DATA.modal     = res.modal     || [];
-        DATA.users     = res.users     || [];
-        DATA.branches  = res.branches  || [];
-        DATA.shifts    = res.shifts    || [];
-        DATA.absenLog  = res.absenLog  || res.absen_log || [];
+        // [V24 FIX] Merge history: server data diutamakan, tapi jaga optimistic records
+        // yang belum ada di server (transaksi baru yang belum di-commit GAS)
+        const serverHistory = res.history || [];
+        if (serverHistory.length > 0) {
+            // [V25 FIX] Deduplicate: backend kadang menggabungkan sheet Orders (DB-...)
+            // dan sheet Payments (TRX-... | CABANG) ke dalam satu array history,
+            // menyebabkan satu transaksi muncul dua kali di dashboard & total penjualan
+            // dihitung ganda. Solusi: buang record Payment (ID mengandung 'TRX-'),
+            // prioritaskan record Order (ID dengan prefix 'DB-').
+            // Jika backend HANYA punya TRX- (tidak ada DB-), tetap pertahankan TRX-.
+            const deduped = (() => {
+                // Pisahkan: DB records vs TRX records
+                const dbRecords  = serverHistory.filter(h => {
+                    const id = (h.ID_Transaksi || h.id_transaksi || '').toString().trim();
+                    return id.startsWith('DB-');
+                });
+                const trxRecords = serverHistory.filter(h => {
+                    const id = (h.ID_Transaksi || h.id_transaksi || '').toString().trim();
+                    return !id.startsWith('DB-');
+                });
+
+                if (dbRecords.length === 0) {
+                    // Tidak ada DB- records → kembalikan semua (mungkin format lama)
+                    return serverHistory;
+                }
+
+                // Ada DB- records → buang TRX- yang merupakan duplikat dari DB-
+                // Cara identifikasi: TRX- biasanya punya Timestamp/Total yang sama
+                // dengan salah satu DB- record. Gunakan composite key: tanggal+total+kasir.
+                const dbKeys = new Set(dbRecords.map(h => {
+                    const ts    = h.Timestamp || h.timestamp || h.Waktu || h.waktu || '';
+                    const total = Number(h.Total_Harga || h.total_harga || 0);
+                    const ksr   = (h.Kasir || h.kasir || '').toString().trim().toLowerCase();
+                    const tgl   = ts ? new Date(ts).toLocaleDateString('en-CA') : '';
+                    return `${tgl}|${total}|${ksr}`;
+                }));
+
+                // Filter TRX- records: buang jika key-nya ada di DB records
+                const uniqueTrx = trxRecords.filter(h => {
+                    const ts    = h.Timestamp || h.timestamp || h.Waktu || h.waktu || '';
+                    const total = Number(h.Total_Harga || h.total_harga || 0);
+                    const ksr   = (h.Kasir || h.kasir || '').toString().trim().toLowerCase();
+                    const tgl   = ts ? new Date(ts).toLocaleDateString('en-CA') : '';
+                    const key   = `${tgl}|${total}|${ksr}`;
+                    return !dbKeys.has(key); // hanya pertahankan jika benar-benar beda
+                });
+
+                const result = [...dbRecords, ...uniqueTrx];
+                if (result.length < serverHistory.length) {
+                    console.log(`[V25] Dedup history: ${serverHistory.length} → ${result.length} records (${serverHistory.length - result.length} duplikat Payment dibuang)`);
+                }
+                return result;
+            })();
+
+            // Cek apakah ada optimistic record lokal yang BELUM masuk server
+            // (identifikasi dengan ID yang tidak ada di serverHistory)
+            const serverIds = new Set(deduped.map(h =>
+                (h.ID_Transaksi || h.id_transaksi || '').toString().trim()
+            ));
+            // [V26 FIX] Composite key server untuk mendeteksi optimistic yang sudah ada
+            // di server meskipun ID-nya berbeda (mis. optimistic pakai DB-xxx, server pakai TRX-xxx)
+            const serverCompositeKeys = new Set(deduped.map(h => {
+                const ts    = h.Timestamp || h.timestamp || h.Waktu || h.waktu || '';
+                const total = Number(h.Total_Harga || h.total_harga || 0);
+                const ksr   = (h.Kasir || h.kasir || '').toString().trim().toLowerCase();
+                const tgl   = ts ? new Date(ts).toLocaleDateString('en-CA') : '';
+                const hh    = ts ? new Date(ts).getHours() : '';
+                const mm    = ts ? new Date(ts).getMinutes() : '';
+                return `${tgl}|${hh}:${mm}|${total}|${ksr}`;
+            }));
+            const localOptimistic = (DATA.history || []).filter(h => {
+                const id = (h.ID_Transaksi || h.id_transaksi || '').toString().trim();
+                if (!id || !h._optimistic) return false;
+                // Buang jika ID sudah ada di server
+                if (serverIds.has(id)) return false;
+                // Buang juga jika composite key (waktu+total+kasir) sudah ada di server
+                const ts    = h.Timestamp || h.timestamp || h.Waktu || h.waktu || '';
+                const total = Number(h.Total_Harga || h.total_harga || 0);
+                const ksr   = (h.Kasir || h.kasir || '').toString().trim().toLowerCase();
+                const tgl   = ts ? new Date(ts).toLocaleDateString('en-CA') : '';
+                const hh    = ts ? new Date(ts).getHours() : '';
+                const mm    = ts ? new Date(ts).getMinutes() : '';
+                const compKey = `${tgl}|${hh}:${mm}|${total}|${ksr}`;
+                if (serverCompositeKeys.has(compKey)) return false;
+                return true;
+            });
+            if (localOptimistic.length < (DATA.history||[]).filter(h=>h._optimistic).length) {
+                console.log(`[V26] Optimistic merge: ${(DATA.history||[]).filter(h=>h._optimistic).length} optimistic → ${localOptimistic.length} masih pending (sisanya sudah confirmed di server)`);
+            }
+            // Gabung: optimistic records di depan (terbaru) + server data (sudah deduped)
+            DATA.history = [...localOptimistic, ...deduped];
+        } else if (!DATA.history || DATA.history.length === 0) {
+            DATA.history = [];
+        }
+        // else: serverHistory kosong tapi DATA.history ada (optimistic) → pertahankan
+        // Sama untuk expenses dan modal
+        if ((res.expenses || []).length > 0) DATA.expenses = res.expenses;
+        else if (!DATA.expenses) DATA.expenses = [];
+        if ((res.modal || []).length > 0) DATA.modal = res.modal;
+        else if (!DATA.modal) DATA.modal = [];
+        DATA.users     = res.users     || DATA.users     || [];
+        DATA.branches  = res.branches  || DATA.branches  || [];
+        DATA.shifts    = res.shifts    || DATA.shifts    || [];
+        DATA.absenLog  = res.absenLog  || res.absen_log  || DATA.absenLog || [];
         // Rekap Shift: coba semua kemungkinan nama field dari backend
-        DATA.rekapShift = res.rekapShift || res.rekap_shift || res.shiftClosing || res.shift_closing || res.rekap || [];
+        DATA.rekapShift = res.rekapShift || res.rekap_shift || res.shiftClosing || res.shift_closing || res.rekap || DATA.rekapShift || [];
 
         // Rebuild cabang filter dropdown for admin
         buildCabangFilterDropdown();
@@ -5156,10 +5401,13 @@ function getFilteredHistoryByCabang(historyAll) {
         });
     } else {
         if (!cabang) return historyAll;
+        const myKasir3 = (localStorage.getItem('user_nama') || '').toLowerCase();
         return historyAll.filter(h => {
             const id = (h.ID_Transaksi || h.id_transaksi || '').toString();
             const hCabang = (h.Cabang || h.cabang || '').toString();
-            return id.includes(cabang) || hCabang === cabang;
+            const kasirH = (h.Kasir || h.kasir || '').toString().toLowerCase();
+            // [V23 FIX] Include TakeAway by kasir
+            return id.includes(cabang) || hCabang === cabang || (myKasir3 && kasirH === myKasir3);
         });
     }
 }
@@ -5273,7 +5521,38 @@ function updateDashboard() {
     // ==================== FILTER TRANSAKSI TERBAYAR ====================
     // Hanya transaksi dengan metode valid (bukan pending/reset) dan total > 0
     const METODE_BAYAR_VALID = ['Tunai', 'QRIS', 'Transfer'];
-    const paidHistory = filteredHistoryFinal.filter(h => {
+
+    // [V26 FIX] Deduplikasi filteredHistoryFinal sebelum hitung paidHistory
+    // Cegah double counting jika optimistic record belum dibuang dari DATA.history
+    const _dedupHistory = (() => {
+        const seenDedupIds   = new Set();
+        const seenDedupComps = new Set();
+        // Urutkan: non-optimistic dulu (prioritas server record)
+        const sorted = [...filteredHistoryFinal].sort((a, b) => {
+            if (a._optimistic && !b._optimistic) return 1;
+            if (!a._optimistic && b._optimistic) return -1;
+            return 0;
+        });
+        return sorted.filter(h => {
+            const id = (h.ID_Transaksi || h.id_transaksi || '').toString().trim();
+            if (id) {
+                if (seenDedupIds.has(id)) return false;
+                seenDedupIds.add(id);
+            }
+            const ts    = h.Timestamp || h.timestamp || h.Waktu || h.waktu || '';
+            const total = Number(h.Total_Harga || h.total_harga || 0);
+            const ksr   = (h.Kasir || h.kasir || '').toString().trim().toLowerCase();
+            const tgl   = ts ? new Date(ts).toLocaleDateString('en-CA') : '';
+            const hh    = ts ? new Date(ts).getHours() : '';
+            const mm    = ts ? new Date(ts).getMinutes() : '';
+            const compKey = `${tgl}|${hh}:${mm}|${total}|${ksr}`;
+            if (compKey !== '||0|' && seenDedupComps.has(compKey)) return false;
+            if (compKey !== '||0|') seenDedupComps.add(compKey);
+            return true;
+        });
+    })();
+
+    const paidHistory = _dedupHistory.filter(h => {
         const metode = (h.Metode_Bayar || h.metode_bayar || '').toString().trim();
         const total  = Number(h.Total_Harga || h.total_harga || 0);
         return METODE_BAYAR_VALID.includes(metode) && total > 0;
@@ -5700,8 +5979,35 @@ function renderRecentOrders() {
         filtered = getFilteredHistoryByCabang(filtered);
     }
 
+    // [V26 FIX] Deduplikasi by ID sebelum render — cegah double counting
+    // jika optimistic record belum sempat dibuang dari DATA.history
+    const seenIds = new Set();
+    const seenCompositeKeys = new Set();
+    filtered = filtered.filter(h => {
+        const id = (h.ID_Transaksi || h.id_transaksi || '').toString().trim();
+        // Deduplicate by ID (prioritaskan non-optimistic jika ada)
+        if (id) {
+            if (seenIds.has(id)) return false;
+            seenIds.add(id);
+        }
+        // Deduplicate by composite key: waktu(menit)+total+kasir
+        const ts    = h.Timestamp || h.timestamp || h.Waktu || h.waktu || '';
+        const total = Number(h.Total_Harga || h.total_harga || 0);
+        const ksr   = (h.Kasir || h.kasir || '').toString().trim().toLowerCase();
+        const tgl   = ts ? new Date(ts).toLocaleDateString('en-CA') : '';
+        const hh    = ts ? new Date(ts).getHours() : '';
+        const mm    = ts ? new Date(ts).getMinutes() : '';
+        const compKey = `${tgl}|${hh}:${mm}|${total}|${ksr}`;
+        if (compKey !== '||0|' && seenCompositeKeys.has(compKey)) return false;
+        if (compKey !== '||0|') seenCompositeKeys.add(compKey);
+        return true;
+    });
+
     // Sort terbaru di atas
     filtered.sort((a, b) => {
+        // Non-optimistic (server confirmed) lebih prioritas daripada optimistic
+        if (a._optimistic && !b._optimistic) return 1;
+        if (!a._optimistic && b._optimistic) return -1;
         const ta = new Date(a.Timestamp || a.timestamp || 0);
         const tb = new Date(b.Timestamp || b.timestamp || 0);
         return tb - ta;
@@ -5753,7 +6059,7 @@ function renderMeja() {
     let tables = DATA.tables || [];
     if (tables.length === 0) {
         let list = (typeof SettingsManager !== 'undefined') ? (SettingsManager.get('meja_list') || []) : [];
-        if (!Array.isArray(list) || list.length === 0) list = ['Meja 1','Meja 2','Meja 3','Meja 4','Meja 5'];
+        if (!Array.isArray(list) || list.length === 0) list = ['Meja 1','Meja 2','Meja 3','Meja 4','Meja 5','Meja 6','Meja 7','Meja 8','Meja 9','Meja 10'];
         tables = list.map(m => ({ ID_Meja: m, id_meja: m, Status: 'Kosong', status: 'Kosong' }));
     }
     document.getElementById('grid-meja').innerHTML = tables.map(m => `
@@ -5990,10 +6296,10 @@ function modalBayar() {
 }
 
 // [V16] Buat PaymentSession — dipanggil saat modal bayar terbuka
+// [V27] ACTIVE_SESSION_ID / ACTIVE_TRX_ID TIDAK di-null-kan di sini.
+// Keduanya hanya di-reset SETELAH seluruh proses pembayaran sukses.
 async function _v16CreateSession() {
     try {
-        ACTIVE_SESSION_ID = null;
-        ACTIVE_TRX_ID     = null;
         const res = await fetch(API_URL, {
             method: 'POST',
             body: JSON.stringify({
@@ -6005,6 +6311,8 @@ async function _v16CreateSession() {
         }).then(r => r.json());
         if (res && res.status === 'success') {
             ACTIVE_SESSION_ID = res.session_id;
+            // [V27] Simpan expires_at agar frontend bisa cek expiry lokal
+            window._SESSION_EXPIRES_AT = res.expires_at ? new Date(res.expires_at) : null;
         }
     } catch(e) {
         console.warn('[V16] createPaymentSession gagal:', e);
@@ -6014,32 +6322,34 @@ async function _v16CreateSession() {
 // [V16] Dipanggil saat modal ditutup tanpa pembayaran
 async function _v16OnModalClosed() {
     if (!ACTIVE_SESSION_ID) return;
+    const sesId = ACTIVE_SESSION_ID;
+    ACTIVE_SESSION_ID = null;
+    ACTIVE_TRX_ID     = null;
     try {
         await fetch(API_URL, {
             method: 'POST',
             body: JSON.stringify({
                 action:     'closePaymentSession',
-                session_id: ACTIVE_SESSION_ID,
+                session_id: sesId,
                 status:     'Cancelled'
             })
-        });
+        }).then(r => r.json());
     } catch(e) { /* silent */ }
-    ACTIVE_SESSION_ID = null;
-    ACTIVE_TRX_ID     = null;
 }
 
-// [V16] Update field pada session aktif — fire-and-forget
+// [V16] Update field pada session aktif
 async function _v16UpdateSession(fields) {
     if (!ACTIVE_SESSION_ID) return;
     try {
-        await fetch(API_URL, {
+        const res = await fetch(API_URL, {
             method: 'POST',
             body: JSON.stringify(
                 Object.assign({ action: 'updatePaymentSession', session_id: ACTIVE_SESSION_ID }, fields)
             )
-        });
+        }).then(r => r.json()).catch(e => ({ status: 'error', message: e.message }));
+        if (res.status !== 'success') console.warn('[FIX] _v16UpdateSession gagal:', res);
     } catch(e) {
-        console.warn('[V16] updatePaymentSession gagal:', e);
+        console.warn('[FIX] _v16UpdateSession error:', e);
     }
 }
 
@@ -6075,7 +6385,7 @@ function toggleCalculator() {
             Swal.fire({
                 icon: 'warning',
                 title: 'URL QR QRIS Belum Diatur',
-                html: 'Silakan atur URL gambar QR QRIS di <b>Pengaturan Sistem → Pembayaran</b>.',
+                html: 'Silakan upload gambar QR QRIS di <b>Pengaturan Sistem → Pembayaran</b>.',
                 showCancelButton: true,
                 confirmButtonText: 'Buka Pengaturan',
                 cancelButtonText: 'Tutup'
@@ -6099,6 +6409,27 @@ async function eksekusiPembayaran() {
     if (!acquireSubmitLock('bayar')) return; // ← GUARD: tolak double-tap
     const checks = document.querySelectorAll('.split-check:checked');
     if (checks.length === 0) { releaseSubmitLock('bayar'); return Swal.fire('Peringatan','Pilih item yang akan dibayar!','warning'); }
+    // [V27] Validasi session tidak expired sebelum proses bayar
+    if (ACTIVE_SESSION_ID && window._SESSION_EXPIRES_AT) {
+        if (new Date() > window._SESSION_EXPIRES_AT) {
+            releaseSubmitLock('bayar');
+            const result = await Swal.fire({
+                icon: 'warning',
+                title: 'Sesi Pembayaran Expired',
+                text: 'Sesi sudah lebih dari 30 menit. Silakan buka ulang modal pembayaran.',
+                confirmButtonText: 'Buka Ulang',
+                showCancelButton: true,
+                cancelButtonText: 'Batal'
+            });
+            if (result.isConfirmed) {
+                // Reset dan buka ulang session
+                ACTIVE_SESSION_ID = null;
+                window._SESSION_EXPIRES_AT = null;
+                await _v16CreateSession();
+            }
+            return;
+        }
+    }
     const totalPcs = CART.reduce((acc,curr) => acc + curr.qty, 0);
     try {
         if (checks.length === totalPcs) await prosesBayarFinal();
@@ -6115,7 +6446,25 @@ async function eksekusiPembayaran() {
     function tampilMeja() {
     document.getElementById('view-meja').style.display = 'block';
     document.getElementById('view-kasir').style.display = 'none';
-    CART = []; resetDiscountUI(); refreshData();
+    CART = []; resetDiscountUI();
+    // [V24 FIX] Delay 3 detik agar GAS punya waktu commit ke spreadsheet
+    // (finalize berjalan background; 1.5 detik terlalu cepat jika GAS lambat)
+    setTimeout(() => {
+        refreshData().then(() => {
+            const histPage = document.getElementById('page-history');
+            if (histPage && histPage.style.display !== 'none') renderHistory();
+            const ptPage = document.getElementById('page-produk-terjual');
+            if (ptPage && ptPage.style.display !== 'none') hitungProdukTerjual();
+        });
+    }, 3000);
+    // Refresh kedua setelah 8 detik — pastikan data finalize sudah committed ke sheet
+    setTimeout(() => {
+        refreshData().then(() => {
+            const histPage = document.getElementById('page-history');
+            if (histPage && histPage.style.display !== 'none') renderHistory();
+            if (typeof updateDashboard === 'function') updateDashboard();
+        });
+    }, 8000);
 }
 
 // =============================================================
@@ -6163,10 +6512,13 @@ function filterRiwayat() {
     const role = (localStorage.getItem('user_role')||'Kasir').toLowerCase();
     const myCabang = localStorage.getItem('user_cabang')||'';
     if (role !== 'admin' && myCabang) {
+        const myKasir2 = (localStorage.getItem('user_nama') || '').toLowerCase();
         filtered = filtered.filter(h => {
-            const id = (h.ID_Transaksi||h.id_transaksi||'').toString();
-            const c  = (h.Cabang||h.cabang||'').toString();
-            return id.includes(myCabang) || c === myCabang;
+            const id     = (h.ID_Transaksi||h.id_transaksi||'').toString();
+            const c      = (h.Cabang||h.cabang||'').toString();
+            const kasirH = (h.Kasir||h.kasir||'').toString().toLowerCase();
+            // [V23 FIX] Sama seperti updateTabelHistory - include by kasir juga
+            return id.includes(myCabang) || c === myCabang || (myKasir2 && kasirH === myKasir2);
         });
     }
     updateTabelHistory(filtered);
@@ -6185,10 +6537,14 @@ function updateTabelHistory(dataArray) {
     const myCabang = localStorage.getItem('user_cabang')||'';
     let filtered = dataArray;
     if (role !== 'admin' && myCabang) {
+        const myKasir = (localStorage.getItem('user_nama') || '').toLowerCase();
         filtered = dataArray.filter(h => {
-            const id = (h.ID_Transaksi||h.id_transaksi||'').toString();
-            const c  = (h.Cabang||h.cabang||'').toString();
-            return id.includes(myCabang) || c === myCabang;
+            const id     = (h.ID_Transaksi||h.id_transaksi||'').toString();
+            const c      = (h.Cabang||h.cabang||'').toString();
+            const kasirH = (h.Kasir||h.kasir||'').toString().toLowerCase();
+            // [V23 FIX] Tampilkan jika: cabang match ATAU kasir yang login ATAU ID mengandung cabang
+            // TakeAway sering tidak punya cabang di ID_Transaksi
+            return id.includes(myCabang) || c === myCabang || (myKasir && kasirH === myKasir);
         });
     }
     if (!filtered || filtered.length === 0) {
@@ -6631,29 +6987,14 @@ async function simpanEditTransaksi() {
         produkYangBerubah[baru.nama] = prod; // tandai sebagai changed
     });
 
-    // --- Perbarui DATA.history lokal (langsung, tanpa tunggu API) ---
     const detailTeks  = itemsBaru.map(i => `${i.nama} (x${i.qty})`).join(', ');
     const labelMatch  = (trxLama.Item_Detail || trxLama.item_detail || '').match(/(\[.*?\])\s*/);
     const labelPrefix = labelMatch ? labelMatch[1] + ' ' : '';
-    const histIdx = (DATA.history || []).findIndex(h => (h.ID_Transaksi || h.id_transaksi) === idTrx);
-    if (histIdx !== -1) {
-        DATA.history[histIdx].Item_Detail  = `${labelPrefix}${detailTeks}`;
-        DATA.history[histIdx].item_detail  = `${labelPrefix}${detailTeks}`;
-        DATA.history[histIdx].Items        = JSON.stringify(itemsBaru);
-        DATA.history[histIdx].items        = JSON.stringify(itemsBaru);
-        DATA.history[histIdx].Total_Harga  = totalBaru;
-        DATA.history[histIdx].total_harga  = totalBaru;
-        DATA.history[histIdx].Diskon       = diskon;
-        DATA.history[histIdx].diskon       = diskon;
-        DATA.history[histIdx].Metode_Bayar = metode;
-        DATA.history[histIdx].metode_bayar = metode;
-    }
 
-    // --- Sinkronisasi ke Google Apps Script ---
+    // [BUG FIX] Sinkronisasi ke server DULU, update lokal HANYA jika sukses
     loading(true);
     let apiSuccess = false;
     try {
-        // 1. Update transaksi utama
         const payload = {
             action:       'updateTransaction',
             id_transaksi: idTrx,
@@ -6663,14 +7004,32 @@ async function simpanEditTransaksi() {
             diskon:       diskon,
             metode:       metode
         };
-        const res = await fetch(API_URL, { method: 'POST', body: JSON.stringify(payload) })
-                         .then(r => r.json())
-                         .catch(() => null);
+        // [BUG FIX] Tambah Content-Type header
+        const res = await fetch(API_URL, {
+            method: 'POST',
+            body: JSON.stringify(payload)
+        }).then(r => r.json()).catch(() => null);
 
         apiSuccess = (res && res.status === 'success');
 
-        // 2. FIXED: Sinkronisasi stok secara paralel (Promise.all),
-        //    hanya untuk produk yang benar-benar berubah
+        // [BUG FIX] Update DATA.history lokal HANYA setelah API sukses
+        if (apiSuccess) {
+            const histIdx = (DATA.history || []).findIndex(h => (h.ID_Transaksi || h.id_transaksi) === idTrx);
+            if (histIdx !== -1) {
+                DATA.history[histIdx].Item_Detail  = `${labelPrefix}${detailTeks}`;
+                DATA.history[histIdx].item_detail  = `${labelPrefix}${detailTeks}`;
+                DATA.history[histIdx].Items        = JSON.stringify(itemsBaru);
+                DATA.history[histIdx].items        = JSON.stringify(itemsBaru);
+                DATA.history[histIdx].Total_Harga  = totalBaru;
+                DATA.history[histIdx].total_harga  = totalBaru;
+                DATA.history[histIdx].Diskon       = diskon;
+                DATA.history[histIdx].diskon       = diskon;
+                DATA.history[histIdx].Metode_Bayar = metode;
+                DATA.history[histIdx].metode_bayar = metode;
+            }
+        }
+
+        // [BUG FIX] Tambah Content-Type pada stok update
         if (apiSuccess && Object.keys(produkYangBerubah).length > 0) {
             const stokUpdatePromises = Object.values(produkYangBerubah).map(prod => {
                 const namaProduk = prod.Nama || prod.nama || '';
@@ -6685,22 +7044,19 @@ async function simpanEditTransaksi() {
                         kategori:  prod.Kategori || prod.kategori || '-',
                         stok:      stokBaru
                     })
-                }).catch(() => {}); // Jangan blokir meski satu gagal
+                }).catch(() => {});
             });
             await Promise.all(stokUpdatePromises);
         }
     } catch(e) {
-        // Data lokal sudah diperbarui; API gagal tidak blokir UI
         console.warn('[EditTransaksi] Sinkronisasi API gagal:', e.message);
     } finally {
         releaseSubmitLock('editTrx');
         loading(false);
     }
 
-    // --- FIXED: Reset state SETELAH semua async selesai ---
     EDIT_TRX_DATA = null;
 
-    // --- Tutup modal & refresh tampilan ---
     const mInst = bootstrap.Modal.getInstance(document.getElementById('modalEditTransaksi'));
     if (mInst) mInst.hide();
 
@@ -6718,10 +7074,10 @@ async function simpanEditTransaksi() {
         });
     } else {
         Swal.fire({
-            title: 'Disimpan Lokal',
-            html: `Transaksi <b>${shortId}</b> diperbarui di perangkat ini.<br>
-                   <small class="text-warning">Sinkronisasi ke server gagal — data lokal sudah tersimpan.</small>`,
-            icon: 'warning',
+            title: 'Gagal Sinkronisasi',
+            html: `Transaksi <b>${shortId}</b> gagal diperbarui ke server.<br>
+                   <small class="text-danger">Silakan coba lagi.</small>`,
+            icon: 'error',
             timer: 3500,
             showConfirmButton: false
         });
@@ -6749,11 +7105,13 @@ function hitungProdukTerjual() {
         if (!ts) return;
         const tgl = new Date(ts).toLocaleDateString('en-CA');
         if ((dateStart && tgl < dateStart) || (dateEnd && tgl > dateEnd)) return;
-        // Cabang filter
+        // Cabang filter [V23 FIX] include by kasir untuk TakeAway
         if (role !== 'admin' && myCabang) {
-            const id = (h.ID_Transaksi||h.id_transaksi||'').toString();
-            const c  = (h.Cabang||h.cabang||'').toString();
-            if (!id.includes(myCabang) && c !== myCabang) return;
+            const id     = (h.ID_Transaksi||h.id_transaksi||'').toString();
+            const c      = (h.Cabang||h.cabang||'').toString();
+            const kasirH = (h.Kasir||h.kasir||'').toString().toLowerCase();
+            const myKasirPT = (localStorage.getItem('user_nama')||'').toLowerCase();
+            if (!id.includes(myCabang) && c !== myCabang && !(myKasirPT && kasirH === myKasirPT)) return;
         }
         let detail = (h.Item_Detail||h.item_detail||"").replace(/\[.*?\]\s*/g,"");
         detail.split(',').forEach(item => {
@@ -6938,7 +7296,7 @@ async function modalUpdateStok(nama, stokSaat) {
     loading(true); 
     try {
         const prod = DATA.products.find(p=>(p.Nama||p.nama)===nama);
-        const res = await fetch(API_URL,{method:"POST",body:JSON.stringify({action:'updateProduct',nama_lama:nama,nama,harga:Number(prod?.Harga||prod?.harga||0),kategori:prod?.Kategori||prod?.kategori||'-',stok:value})}).then(r=>r.json());
+        const res = await fetch(API_URL,{method:"POST",headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'updateProduct',nama_lama:nama,nama,harga:Number(prod?.Harga||prod?.harga||0),kategori:prod?.Kategori||prod?.kategori||'-',stok:value})}).then(r=>r.json());
         if(res.status==='success'){await refreshData();renderInventory();Swal.fire({title:'Stok Diperbarui!',icon:'success',timer:1500,showConfirmButton:false});}
     } catch(e){Swal.fire('Error','Gagal update stok','error');}
     loading(false);
@@ -7114,7 +7472,7 @@ async function hapusCabang(id) {
     if (!result.isConfirmed) return;
     loading(true);
     try {
-        const res = await fetch(API_URL,{method:"POST",body:JSON.stringify({action:'deleteBranch',id})}).then(r=>r.json());
+        const res = await fetch(API_URL,{method:"POST",headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'deleteBranch',id})}).then(r=>r.json());
         if (res.status==='success') { await refreshData(); renderCabangMgmt(); Swal.fire({title:'Dihapus!',icon:'success',timer:1500,showConfirmButton:false}); }
         else { Swal.fire('Gagal',res.message||'Cabang tidak ditemukan','error'); }
     } catch(e) { Swal.fire('Error','Gagal terhubung','error'); }
@@ -8031,7 +8389,7 @@ async function simpanUser() {
     if (password && password.length < 4) { releaseSubmitLock('simpanUser'); return Swal.fire('Password Pendek','Password minimal 4 karakter','warning'); }
     loading(true);
     try {
-        const res = await fetch(API_URL,{method:"POST",body:JSON.stringify({action:usernameLama?'updateUser':'addUser',username_lama:usernameLama,username,password,role,nama,cabang})}).then(r=>r.json());
+        const res = await fetch(API_URL,{method:"POST",headers:{'Content-Type':'application/json'},body:JSON.stringify({action:usernameLama?'updateUser':'addUser',username_lama:usernameLama,username,password,role,nama,cabang})}).then(r=>r.json());
         if (res.status==='success') {
             bootstrap.Modal.getInstance(document.getElementById('modalUserForm')).hide();
             await refreshData(); renderUserMgmt();
@@ -8048,7 +8406,7 @@ async function hapusUser(username) {
     if (!result.isConfirmed) return;
     loading(true);
     try {
-        const res = await fetch(API_URL,{method:"POST",body:JSON.stringify({action:'deleteUser',username})}).then(r=>r.json());
+        const res = await fetch(API_URL,{method:"POST",headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'deleteUser',username})}).then(r=>r.json());
         if(res.status==='success'){await refreshData();renderUserMgmt();Swal.fire({title:'Dihapus!',icon:'success',timer:1500,showConfirmButton:false});}
         else{Swal.fire('Gagal',res.message||'User tidak ditemukan','error');}
     } catch(e){Swal.fire('Error','Gagal terhubung','error');}
@@ -8761,7 +9119,7 @@ async function simpanProduk() {
     try {
         const payload={action:namaLama?'updateProduct':'addProduct',nama,harga,kategori,stok};
         if(namaLama)payload.nama_lama=namaLama;
-        const res=await fetch(API_URL,{method:"POST",body:JSON.stringify(payload)}).then(r=>r.json());
+        const res=await fetch(API_URL,{method:"POST",headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(r=>r.json());
         if(res.status==='success'){bootstrap.Modal.getInstance(document.getElementById('modalProdukForm')).hide();await refreshData();renderProdukManajemen();Swal.fire({title:namaLama?'Produk Diperbarui!':'Produk Ditambahkan!',icon:'success',timer:1800,showConfirmButton:false});}
         else{Swal.fire('Gagal',res.message||'Terjadi kesalahan','error');}
     } catch(e){Swal.fire('Error','Gagal terhubung ke server','error');}
@@ -8773,7 +9131,7 @@ async function hapusProduk(nama) {
     if(!result.isConfirmed)return;
     loading(true);
     try {
-        const res=await fetch(API_URL,{method:"POST",body:JSON.stringify({action:'deleteProduct',nama})}).then(r=>r.json());
+        const res=await fetch(API_URL,{method:"POST",headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'deleteProduct',nama})}).then(r=>r.json());
         if(res.status==='success'){await refreshData();renderProdukManajemen();Swal.fire({title:'Dihapus!',icon:'success',timer:1500,showConfirmButton:false});}
         else{Swal.fire('Gagal',res.message||'Produk tidak ditemukan','error');}
     } catch(e){Swal.fire('Error','Gagal terhubung','error');}
@@ -9360,14 +9718,15 @@ async function simpanPesanan() {
     if (!validateAdminBranch()) return;
     if (CART.length === 0) return Swal.fire('Kosong', 'Tidak ada pesanan', 'warning');
     loading(true);
-    const detailTeks = CART.map(i => `${i.nama} (x${i.qty})`).join(', ');
-    const labelMeja  = document.getElementById('label-meja')?.innerText || "TA";
-    const activeCabang = getActiveCabang(); // FIXED
+    const detailTeks   = CART.map(i => `${i.nama} (x${i.qty})`).join(', ');
+    const labelMeja    = document.getElementById('label-meja')?.innerText || "TA";
+    const activeCabang = getActiveCabang();
     try {
-        await fetch(API_URL, {
+        // [BUG FIX] Tambah Content-Type + cek response
+        const res = await fetch(API_URL, {
             method: 'POST',
             body: JSON.stringify({
-                action:      'updateTableStatus', // bukan saveTransaction — tidak tulis history
+                action:      'updateTableStatus',
                 table:       String(AKTIF_MEJA),
                 customer:    document.getElementById('cust-name').value || "Guest",
                 item_detail: `[${labelMeja}] ${detailTeks}`,
@@ -9377,11 +9736,15 @@ async function simpanPesanan() {
                 kasir:       KASIR,
                 cabang:      activeCabang
             })
-        });
+        }).then(r => r.json());
+
+        if (!res || res.status !== 'success') {
+            throw new Error(res?.message || res?.error || 'updateTableStatus gagal — pesanan tidak tersimpan.');
+        }
         Swal.fire('Tersimpan', 'Pesanan berhasil diperbarui', 'success');
         tampilMeja();
     } catch (e) {
-        Swal.fire('Gagal', 'Gagal menyimpan pesanan', 'error');
+        Swal.fire('Gagal', e.message || 'Gagal menyimpan pesanan', 'error');
     }
     loading(false);
 }
@@ -9397,26 +9760,35 @@ async function cancelPesananMeja() {
         showCancelButton: true,
         confirmButtonColor: '#ef4444',
         confirmButtonText: 'Ya, Reset'
-    }).then(async res => {
-        if (res.isConfirmed) {
+    }).then(async konfirmasi => {
+        if (konfirmasi.isConfirmed) {
             loading(true);
-            const activeCabang = getActiveCabang(); // FIXED
-            await fetch(API_URL, {
-                method: 'POST',
-                body: JSON.stringify({
-                    action:      'updateTableStatus', // bukan saveTransaction — tidak tulis history
-                    table:       String(AKTIF_MEJA),
-                    customer:    '',
-                    item_detail: '',
-                    items:       '[]',
-                    total:       0,
-                    status:      'Kosong',
-                    kasir:       KASIR,
-                    cabang:      activeCabang
-                })
-            });
-            resetDiscountUI();
-            tampilMeja();
+            const activeCabang = getActiveCabang();
+            try {
+                // [BUG FIX] Tambah Content-Type + cek response
+                const res = await fetch(API_URL, {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        action:      'updateTableStatus',
+                        table:       String(AKTIF_MEJA),
+                        customer:    '',
+                        item_detail: '',
+                        items:       '[]',
+                        total:       0,
+                        status:      'Kosong',
+                        kasir:       KASIR,
+                        cabang:      activeCabang
+                    })
+                }).then(r => r.json());
+
+                if (!res || res.status !== 'success') {
+                    throw new Error(res?.message || res?.error || 'Reset meja gagal di server.');
+                }
+                resetDiscountUI();
+                tampilMeja();
+            } catch (e) {
+                Swal.fire('Gagal', e.message || 'Gagal mereset meja', 'error');
+            }
             loading(false);
         }
     });
@@ -9429,6 +9801,7 @@ async function prosesBayarFinal() {
     if (!validateAdminBranch()) return;
     const btnKonfirmasi = document.getElementById('btn-konfirmasi-lunas');
     if (btnKonfirmasi) { btnKonfirmasi.disabled = true; btnKonfirmasi.textContent = 'Memproses...'; }
+    loading(true);
     try {
         const met           = document.querySelector('input[name="metode"]:checked').value;
         const nilaiBayar    = Number(document.getElementById('input-bayar').value) || window.CURRENT_TOTAL;
@@ -9441,112 +9814,194 @@ async function prosesBayarFinal() {
 
         const now = new Date();
         const pad = n => String(n).padStart(2,'0');
-        // [V21] Gunakan generateOrderNumber jika tersedia, fallback ke format lama
         const localTrxId = (typeof generateOrderNumber === 'function')
             ? generateOrderNumber()
             : `TRX${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}-${activeCabang || 'X'}`;
         window.LAST_TRX_ID = localTrxId;
 
-        loading(true);
+        // [V24 FIX] Payload saveTransaction — kirim dengan timeout lebih panjang (45 detik)
+        // dan NO retry (retry bisa menyebabkan duplikasi data di sheet)
+        const saveTrxPayload = {
+            action:         'saveTransaction',
+            client_trx_id:  localTrxId,  // [V25 FIX] Kirim ke backend sbg idempotency key
+            session_id:     ACTIVE_SESSION_ID || undefined, // [V27] Backend validasi session masih aktif
+            table:          String(AKTIF_MEJA),
+            customer:       customerName,
+            item_detail:    `[${labelMeja}] ${detailTeks}`,
+            items:          JSON.stringify(CART),
+            diskon:         window.CURRENT_DISKON,
+            total:          window.CURRENT_TOTAL,
+            status:         'Kosong',
+            kasir:          KASIR,
+            metode:         met,
+            cabang:         activeCabang
+        };
+        console.log('[V24] saveTransaction payload:', JSON.stringify(saveTrxPayload));
+
         const res = await fetch(API_URL, {
             method: 'POST',
-            body: JSON.stringify({
-                action:      'saveTransaction',
-                table:       String(AKTIF_MEJA),
-                customer:    customerName,
-                item_detail: `[${labelMeja}] ${detailTeks}`,
-                items:       JSON.stringify(CART),
-                diskon:      window.CURRENT_DISKON,
-                total:       window.CURRENT_TOTAL,
-                status:      'Kosong',
-                kasir:       KASIR,
-                metode:      met,
-                cabang:      activeCabang
-            })
+            body: JSON.stringify(saveTrxPayload),
+            _timeout: 45000,  // 45 detik — GAS bisa lambat saat load tinggi
+            _retry: 1         // NO retry untuk saveTransaction — cegah duplikasi data
         }).then(r => r.json());
 
-        // [V16] Ambil id_transaksi dari backend (PATCH B-1)
-        const backendTrxId = (res && (res.id_transaksi || res.ID_Transaksi))
-            ? (res.id_transaksi || res.ID_Transaksi)
-            : localTrxId;
+        console.log('[V24] saveTransaction response:', JSON.stringify(res));
+
+        // [BUG FIX #2] Throw jika backend menolak — hentikan sebelum finalize
+        if (!res || res.status !== 'success') {
+            throw new Error(res?.message || res?.error || 'saveTransaction gagal — transaksi tidak tersimpan.');
+        }
+
+        const backendTrxId = (res.id_transaksi || res.ID_Transaksi) || localTrxId;
         window.LAST_TRX_ID = backendTrxId;
         ACTIVE_TRX_ID      = backendTrxId;
 
-        if (res.status === 'success') {
-            // [V16] Catat payment + tutup session — tidak await agar cashier flow tidak terhambat
-            _v16FinalizePembayaran(backendTrxId, met, window.CURRENT_TOTAL, activeCabang);
-
-            const modalEl   = document.getElementById('modalBayar');
-            const mInstance = bootstrap.Modal.getInstance(modalEl);
-            if (mInstance) {
-                // Lepas listener cancel agar tidak trigger _v16OnModalClosed
-                modalEl.removeEventListener('hidden.bs.modal', _v16OnModalClosed);
-                mInstance.hide();
-            }
-
-            Swal.fire({
-                title: 'Berhasil Lunas!',
-                icon: 'success',
-                showCancelButton: true,
-                confirmButtonText: 'Cetak Struk',
-                cancelButtonText: 'Selesai'
-            }).then(result => {
-                if (result.isConfirmed) {
-                    printStruk(met, nilaiBayar, savedDType, savedDVal);
-                }
-                tampilMeja();
-            });
+        // [V23 FIX] Optimistic update — tambah ke DATA.history lokal segera
+        // agar riwayat transaksi langsung muncul tanpa tunggu refreshData dari server
+        try {
+            const now = new Date();
+            const labelMejaTA = document.getElementById('label-meja')?.innerText || 'TA';
+            const newTrx = {
+                ID_Transaksi:  backendTrxId,
+                id_transaksi:  backendTrxId,
+                Timestamp:     now.toISOString(),
+                timestamp:     now.toISOString(),
+                Waktu:         now.toLocaleString('id-ID'),
+                Kasir:         KASIR,
+                kasir:         KASIR,
+                Cabang:        activeCabang,
+                cabang:        activeCabang,
+                Meja:          String(AKTIF_MEJA),
+                meja:          String(AKTIF_MEJA),
+                Pelanggan:     document.getElementById('cust-name')?.value || 'Guest',
+                pelanggan:     document.getElementById('cust-name')?.value || 'Guest',
+                Item_Detail:   '[' + labelMejaTA + '] ' + CART.map(i => i.nama + ' (x' + i.qty + ')').join(', '),
+                item_detail:   '[' + labelMejaTA + '] ' + CART.map(i => i.nama + ' (x' + i.qty + ')').join(', '),
+                Items:         JSON.stringify(CART),
+                items:         JSON.stringify(CART),
+                Total_Harga:   window.CURRENT_TOTAL,
+                total_harga:   window.CURRENT_TOTAL,
+                Diskon:        window.CURRENT_DISKON || 0,
+                diskon:        window.CURRENT_DISKON || 0,
+                Metode_Bayar:  met,
+                metode_bayar:  met,
+                Status:        'Paid',
+                status:        'Paid',
+                _optimistic:   true  // flag: belum dikonfirmasi dari server
+            };
+            if (!Array.isArray(DATA.history)) DATA.history = [];
+            DATA.history.unshift(newTrx); // tambah di awal (terbaru dulu)
+        } catch(optErr) {
+            console.warn('[V23] Optimistic update gagal (tidak kritis):', optErr);
         }
+
+        // [V24 FIX] Finalize dijalankan fire-and-forget (tidak di-await)
+        // agar loading() langsung selesai setelah saveTransaction sukses.
+        // closeSession, createPayment, updateSession tidak perlu blocking UX kasir.
+        _v16FinalizePembayaran(backendTrxId, met, window.CURRENT_TOTAL, activeCabang)
+            .catch(e => console.warn('[V24] Finalize background error (tidak kritis):', e));
+
+        const modalEl   = document.getElementById('modalBayar');
+        const mInstance = bootstrap.Modal.getInstance(modalEl);
+        if (mInstance) {
+            modalEl.removeEventListener('hidden.bs.modal', _v16OnModalClosed);
+            mInstance.hide();
+        }
+
+        // Matikan loading SEBELUM Swal — kasir tidak perlu menunggu finalize
+        if (btnKonfirmasi) { btnKonfirmasi.disabled = false; btnKonfirmasi.textContent = 'KONFIRMASI PEMBAYARAN'; }
+        loading(false);
+
+        // [V23 FIX] await Swal agar tampilMeja() pasti jalan dan tidak terlewat
+        const hasilSwal = await Swal.fire({
+            title: '✅ Berhasil Lunas!',
+            icon: 'success',
+            showCancelButton: true,
+            confirmButtonText: '🖨️ Cetak Struk',
+            cancelButtonText: 'Selesai'
+        });
+        if (hasilSwal.isConfirmed) {
+            printStruk(met, nilaiBayar, savedDType, savedDVal);
+        }
+        // Kembali ke denah meja & refresh data dengan delay 1.5s 
+        // agar GAS punya waktu commit write ke spreadsheet
+        tampilMeja();
     } catch (e) {
         Swal.fire('Gagal!', e.message, 'error');
-    } finally {
         if (btnKonfirmasi) { btnKonfirmasi.disabled = false; btnKonfirmasi.textContent = 'KONFIRMASI PEMBAYARAN'; }
+        loading(false);
     }
-    loading(false);
 }
 
-// [V16] Catat payment + tutup session setelah prosesBayarFinal berhasil
+// [V24] Catat payment + tutup session — dijalankan PARALEL (Promise.all)
+// agar tidak blocking UI. Dipanggil sebagai fire-and-forget dari prosesBayarFinal.
 async function _v16FinalizePembayaran(idTrx, metode, nominal, cabang) {
+    // [V27] Simpan IDs dulu, reset SETELAH seluruh finalize selesai
+    const sesId = ACTIVE_SESSION_ID;
     try {
-        if (ACTIVE_SESSION_ID && idTrx) {
-            await fetch(API_URL, {
-                method: 'POST',
-                body: JSON.stringify({
-                    action:       'updatePaymentSession',
-                    session_id:   ACTIVE_SESSION_ID,
-                    id_transaksi: idTrx
-                })
-            });
+        const tasks = [];
+
+        // Task A: update session — link trx, set status Paid, set Total_Paid
+        if (sesId && idTrx) {
+            tasks.push(
+                fetch(API_URL, {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        action:       'updatePaymentSession',
+                        session_id:   sesId,
+                        id_transaksi: idTrx,
+                        status:       'Paid',
+                        total_paid:   nominal  // [V27] update Total_Paid di session
+                    })
+                }).then(r => r.json()).catch(e => ({ status: 'error', message: e.message }))
+            );
         }
+
+        // Task B: catat record pembayaran
         if (idTrx) {
-            await fetch(API_URL, {
-                method: 'POST',
-                body: JSON.stringify({
-                    action:       'createPayment',
-                    id_transaksi: idTrx,
-                    id_meja:      String(AKTIF_MEJA),
-                    nominal:      nominal,
-                    metode:       metode.toLowerCase(),
-                    kasir:        KASIR,
-                    cabang:       cabang
-                })
-            });
+            tasks.push(
+                fetch(API_URL, {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        action:       'createPayment',
+                        id_transaksi: idTrx,
+                        id_meja:      String(AKTIF_MEJA),
+                        nominal:      nominal,
+                        metode:       metode.toLowerCase(),
+                        kasir:        KASIR,
+                        cabang:       cabang
+                    })
+                }).then(r => r.json()).catch(e => ({ status: 'error', message: e.message }))
+            );
         }
-        if (ACTIVE_SESSION_ID) {
-            await fetch(API_URL, {
-                method: 'POST',
-                body: JSON.stringify({
-                    action:     'closePaymentSession',
-                    session_id: ACTIVE_SESSION_ID,
-                    status:     'Paid'
-                })
-            });
+
+        // Task C: tutup session jika sesId ada tapi idTrx tidak ada
+        if (sesId && !idTrx) {
+            tasks.push(
+                fetch(API_URL, {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        action:     'closePaymentSession',
+                        session_id: sesId,
+                        status:     'Paid',
+                        total_paid: nominal
+                    })
+                }).then(r => r.json()).catch(e => ({ status: 'error', message: e.message }))
+            );
         }
+
+        // Jalankan semua task PARALEL
+        const results = await Promise.all(tasks);
+        results.forEach((r, i) => {
+            if (r && r.status !== 'success') console.warn('[V27] Finalize task', i, 'gagal:', r);
+        });
     } catch(e) {
-        console.warn('[V16] _v16FinalizePembayaran gagal:', e);
+        console.error('[V27] _v16FinalizePembayaran error:', e);
     } finally {
-        ACTIVE_SESSION_ID = null;
-        ACTIVE_TRX_ID     = null;
+        // [V27] Reset IDs SETELAH finalize selesai (sukses atau gagal)
+        ACTIVE_SESSION_ID         = null;
+        ACTIVE_TRX_ID             = null;
+        window._SESSION_EXPIRES_AT = null;
     }
 }
 
@@ -9556,6 +10011,7 @@ async function _v16FinalizePembayaran(idTrx, metode, nominal, cabang) {
 async function prosesSplitBill() {
     const btnKonfirmasi = document.getElementById('btn-konfirmasi-lunas');
     if (btnKonfirmasi) { btnKonfirmasi.disabled = true; btnKonfirmasi.textContent = 'Memproses...'; }
+    loading(true);
     try {
         const met           = document.querySelector('input[name="metode"]:checked').value;
         const checks        = document.querySelectorAll('.split-check:checked');
@@ -9579,95 +10035,127 @@ async function prosesSplitBill() {
         const labelMeja      = document.getElementById('label-meja')?.innerText || "TA";
         const currentSplitTotal = TOTAL_SPLIT;
 
-        loading(true);
+        const splitClientId = (typeof generateOrderNumber === 'function')
+            ? generateOrderNumber()
+            : `SPLIT-${Date.now()}-${activeCabang || 'X'}`;
+        const splitPayload = {
+            action:               'splitBill',
+            client_trx_id:        splitClientId,  // [V25 FIX] Idempotency key
+            session_id:           ACTIVE_SESSION_ID || undefined, // [V27] validasi session di backend
+            table:                String(AKTIF_MEJA),
+            customer:             document.getElementById('cust-name')?.value || "Guest",
+            paid_item_names:      `[SPLIT ${labelMeja}] ${paidItemsArray.map(i => i.nama).join(', ')}`,
+            paid_items_json:      JSON.stringify(paidItemsArray),
+            diskon:               window.MODAL_CURRENT_DISCOUNT,
+            amount_paid:          currentSplitTotal,
+            remaining_total:      sisaTagihan,  // [V27] sisa tagihan setelah split ini
+            remaining_items_json: JSON.stringify(remainingCart),
+            metode:               met,
+            kasir:                KASIR,
+            cabang:               activeCabang
+        };
+        console.log('[V24] splitBill payload:', JSON.stringify(splitPayload));
         const res = await fetch(API_URL, {
             method: 'POST',
-            body: JSON.stringify({
-                action:               'splitBill',
-                table:                String(AKTIF_MEJA),
-                customer:             document.getElementById('cust-name')?.value || "Guest",
-                paid_item_names:      `[SPLIT ${labelMeja}] ${paidItemsArray.map(i => i.nama).join(', ')}`,
-                paid_items_json:      JSON.stringify(paidItemsArray),
-                diskon:               window.MODAL_CURRENT_DISCOUNT,
-                amount_paid:          currentSplitTotal,
-                remaining_items_json: JSON.stringify(remainingCart),
-                metode:               met,
-                kasir:                KASIR,
-                cabang:               activeCabang
-            })
+            body: JSON.stringify(splitPayload),
+            _timeout: 45000,  // 45 detik
+            _retry: 1         // NO retry — cegah duplikasi data
         }).then(r => r.json());
+        console.log('[V24] splitBill response:', JSON.stringify(res));
 
-        if (res.status === 'success') {
-            // [V16] Ambil id_transaksi split dari backend (PATCH B-6)
-            const splitTrxId = (res.id_transaksi || res.ID_Transaksi) || null;
-
-            // [V16] Catat partial payment — fire-and-forget
-            _v16RecordSplitPayment(splitTrxId, met, currentSplitTotal, sisaTagihan, remainingCart, activeCabang);
-
-            const modalEl   = document.getElementById('modalBayar');
-            const mInstance = bootstrap.Modal.getInstance(modalEl);
-            if (mInstance) {
-                modalEl.removeEventListener('hidden.bs.modal', _v16OnModalClosed);
-                mInstance.hide();
-            }
-
-            printStrukSplit(paidItemsArray, currentSplitTotal, met, sisaTagihan);
-
-            await Swal.fire('Berhasil!', 'Pembayaran sebagian berhasil dicatat.', 'success');
-
-            CART = remainingCart;
-            updateCartDisplay();
-            refreshData();
+        // [BUG FIX] Throw jika backend menolak
+        if (!res || res.status !== 'success') {
+            throw new Error(res?.message || res?.error || 'splitBill gagal — transaksi tidak tersimpan.');
         }
+
+        const splitTrxId = (res.id_transaksi || res.ID_Transaksi) || null;
+
+        // [V24 FIX] Jalankan record payment sebagai fire-and-forget agar tidak blocking
+        _v16RecordSplitPayment(splitTrxId, met, currentSplitTotal, sisaTagihan, remainingCart, activeCabang)
+            .catch(e => console.warn('[V24] RecordSplitPayment background error (tidak kritis):', e));
+
+        const modalEl   = document.getElementById('modalBayar');
+        const mInstance = bootstrap.Modal.getInstance(modalEl);
+        if (mInstance) {
+            modalEl.removeEventListener('hidden.bs.modal', _v16OnModalClosed);
+            mInstance.hide();
+        }
+
+        // Matikan loading sebelum Swal & print
+        if (btnKonfirmasi) { btnKonfirmasi.disabled = false; btnKonfirmasi.textContent = 'KONFIRMASI PEMBAYARAN'; }
+        loading(false);
+
+        printStrukSplit(paidItemsArray, currentSplitTotal, met, sisaTagihan);
+
+        await Swal.fire('Berhasil!', 'Pembayaran sebagian berhasil dicatat.', 'success');
+
+        CART = remainingCart;
+        updateCartDisplay();
+        refreshData();
     } catch (e) {
         Swal.fire('Gagal', e.toString(), 'error');
-    } finally {
         if (btnKonfirmasi) { btnKonfirmasi.disabled = false; btnKonfirmasi.textContent = 'KONFIRMASI PEMBAYARAN'; }
+        loading(false);
     }
-    loading(false);
 }
 
-// [V16] Catat partial payment + update session ke Partial
+// [V24] Catat partial payment + update session — dijalankan PARALEL (Promise.all)
 async function _v16RecordSplitPayment(splitTrxId, metode, nominalBayar, sisaTagihan, remainingCart, cabang) {
+    // [V27] simpan sesId, reset SETELAH task selesai (hanya jika fully paid)
+    const sesId       = ACTIVE_SESSION_ID;
+    const isFullyPaid = remainingCart.length === 0;
     try {
-        if (ACTIVE_SESSION_ID) {
+        const tasks = [];
+
+        // Task A: update session ke Partial/Paid + link trx + Total_Paid + Remaining_Total
+        if (sesId) {
             const updatePayload = {
-                action:     'updatePaymentSession',
-                session_id: ACTIVE_SESSION_ID,
-                status:     'Partial'
+                action:          'updatePaymentSession',
+                session_id:      sesId,
+                status:          isFullyPaid ? 'Paid' : 'Partial',
+                remaining_total: sisaTagihan  // [V27] update Remaining_Total (bukan Total/Original_Total)
             };
             if (splitTrxId) updatePayload.id_transaksi = splitTrxId;
-            if (remainingCart.length > 0) updatePayload.total = sisaTagihan;
-            await fetch(API_URL, { method: 'POST', body: JSON.stringify(updatePayload) });
+            // [V27] Total_Paid diupdate via _updateSessionAfterSplitPayment di backend (actionSplitBill)
+            // Tidak perlu kirim di sini karena backend sudah handle
+            tasks.push(
+                fetch(API_URL, { method: 'POST', body: JSON.stringify(updatePayload) })
+                    .then(r => r.json()).catch(e => ({ status: 'error', message: e.message }))
+            );
         }
+
+        // Task B: catat record pembayaran
         if (splitTrxId) {
-            await fetch(API_URL, {
-                method: 'POST',
-                body: JSON.stringify({
-                    action:       'createPayment',
-                    id_transaksi: splitTrxId,
-                    id_meja:      String(AKTIF_MEJA),
-                    nominal:      nominalBayar,
-                    metode:       metode.toLowerCase(),
-                    kasir:        KASIR,
-                    cabang:       cabang
-                })
-            });
+            tasks.push(
+                fetch(API_URL, {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        action:       'createPayment',
+                        id_transaksi: splitTrxId,
+                        id_meja:      String(AKTIF_MEJA),
+                        nominal:      nominalBayar,
+                        metode:       metode.toLowerCase(),
+                        kasir:        KASIR,
+                        cabang:       cabang
+                    })
+                }).then(r => r.json()).catch(e => ({ status: 'error', message: e.message }))
+            );
         }
-        if (remainingCart.length === 0 && ACTIVE_SESSION_ID) {
-            await fetch(API_URL, {
-                method: 'POST',
-                body: JSON.stringify({
-                    action:     'closePaymentSession',
-                    session_id: ACTIVE_SESSION_ID,
-                    status:     'Paid'
-                })
-            });
-            ACTIVE_SESSION_ID = null;
-            ACTIVE_TRX_ID     = null;
-        }
+
+        // Jalankan semua task PARALEL
+        const results = await Promise.all(tasks);
+        results.forEach((r, i) => {
+            if (r && r.status !== 'success') console.warn('[V27] SplitPayment task', i, 'gagal:', r);
+        });
     } catch(e) {
-        console.warn('[V16] _v16RecordSplitPayment gagal:', e);
+        console.error('[V27] _v16RecordSplitPayment error:', e);
+    } finally {
+        // [V27] Reset IDs SETELAH semua task, hanya jika fully paid
+        if (isFullyPaid) {
+            ACTIVE_SESSION_ID         = null;
+            ACTIVE_TRX_ID             = null;
+            window._SESSION_EXPIRES_AT = null;
+        }
     }
 }
 // =============================================================
@@ -9690,11 +10178,11 @@ async function konfirmasiPindahMeja(mejaTujuan) {
         const custName   = document.getElementById('cust-name')?.value || "Guest";
         const detailTeks = CART.map(i => `${i.nama} (x${i.qty})`).join(', ');
 
-        // Isi meja tujuan
-        await fetch(API_URL, {
+        // [BUG FIX] Step 1: isi meja tujuan — Content-Type + cek response
+        const r1 = await fetch(API_URL, {
             method: 'POST',
             body: JSON.stringify({
-                action:      'updateTableStatus', // bukan saveTransaction — tidak tulis history
+                action:      'updateTableStatus',
                 table:       String(mejaTujuan),
                 customer:    custName,
                 item_detail: `[MEJA ${mejaTujuan}] ${detailTeks}`,
@@ -9704,13 +10192,17 @@ async function konfirmasiPindahMeja(mejaTujuan) {
                 kasir:       KASIR,
                 cabang:      activeCabang
             })
-        });
+        }).then(r => r.json());
 
-        // Kosongkan meja asal
-        await fetch(API_URL, {
+        if (!r1 || r1.status !== 'success') {
+            throw new Error(r1?.message || r1?.error || 'Gagal mengisi meja tujuan di server.');
+        }
+
+        // [BUG FIX] Step 2: kosongkan meja asal — Content-Type + cek response
+        const r2 = await fetch(API_URL, {
             method: 'POST',
             body: JSON.stringify({
-                action:      'updateTableStatus', // bukan saveTransaction — tidak tulis history
+                action:      'updateTableStatus',
                 table:       String(AKTIF_MEJA),
                 customer:    '',
                 item_detail: '',
@@ -9720,7 +10212,11 @@ async function konfirmasiPindahMeja(mejaTujuan) {
                 kasir:       KASIR,
                 cabang:      activeCabang
             })
-        });
+        }).then(r => r.json());
+
+        if (!r2 || r2.status !== 'success') {
+            throw new Error(r2?.message || r2?.error || 'Meja tujuan terisi, tapi meja asal gagal dikosongkan di server.');
+        }
 
         await refreshData();
         await Swal.fire({
@@ -9747,24 +10243,29 @@ async function simpanKasKeluar() {
     const nom = document.getElementById('exp-nom').value;
     if (!ket || !nom) { releaseSubmitLock('kasKeluar'); return Swal.fire('Error', 'Data belum lengkap', 'error'); }
     loading(true);
-    const activeCabang = getActiveCabang(); // FIXED
+    const activeCabang = getActiveCabang();
     try {
-        await fetch(API_URL, {
+        // [BUG FIX] Tambah Content-Type + cek response
+        const res = await fetch(API_URL, {
             method: 'POST',
             body: JSON.stringify({
-                action:      'saveExpense',
-                keterangan:  ket,
-                nominal:     Number(nom),
-                kasir:       KASIR,
-                cabang:      activeCabang // FIXED: was localStorage.getItem('user_cabang') || ''
+                action:     'saveExpense',
+                keterangan: ket,
+                nominal:    Number(nom),
+                kasir:      KASIR,
+                cabang:     activeCabang
             })
-        });
+        }).then(r => r.json());
+
+        if (!res || res.status !== 'success') {
+            throw new Error(res?.message || res?.error || 'saveExpense gagal — pengeluaran tidak tersimpan di server.');
+        }
         bootstrap.Modal.getInstance(document.getElementById('modalKasKeluar')).hide();
         document.getElementById('exp-ket').value = '';
         document.getElementById('exp-nom').value = '';
         Swal.fire('✅ Berhasil', 'Pengeluaran tercatat', 'success').then(() => refreshData());
     } catch (e) {
-        Swal.fire('Error', 'Gagal simpan', 'error');
+        Swal.fire('Error', e.message || 'Gagal simpan', 'error');
     } finally {
         releaseSubmitLock('kasKeluar');
     }
@@ -9781,26 +10282,31 @@ async function simpanKasMasuk() {
     const nom = document.getElementById('inc-nom').value;
     if (!ket || !nom) { releaseSubmitLock('kasMasuk'); return Swal.fire('Error', 'Data belum lengkap', 'error'); }
     loading(true);
-    const activeCabang = getActiveCabang(); // FIXED
+    const activeCabang = getActiveCabang();
     try {
-        await fetch(API_URL, {
+        // [BUG FIX] Tambah Content-Type + cek response
+        const res = await fetch(API_URL, {
             method: 'POST',
             body: JSON.stringify({
-                action:      'saveCashLog',
-                tipe:        'Masuk',
-                jumlah:      Number(nom),
-                keterangan:  ket,
-                kasir:       KASIR,
-                cabang:      activeCabang // FIXED: was localStorage.getItem('user_cabang') || ''
+                action:     'saveCashLog',
+                tipe:       'Masuk',
+                jumlah:     Number(nom),
+                keterangan: ket,
+                kasir:      KASIR,
+                cabang:     activeCabang
             })
-        });
+        }).then(r => r.json());
+
+        if (!res || res.status !== 'success') {
+            throw new Error(res?.message || res?.error || 'saveCashLog gagal — kas masuk tidak tersimpan di server.');
+        }
         bootstrap.Modal.getInstance(document.getElementById('modalKasMasuk')).hide();
         document.getElementById('inc-ket').value = '';
         document.getElementById('inc-nom').value = '';
         Swal.fire('✅ Berhasil', 'Kas masuk tercatat', 'success');
         refreshData();
     } catch (e) {
-        Swal.fire('Error', 'Gagal terhubung', 'error');
+        Swal.fire('Error', e.message || 'Gagal terhubung', 'error');
     } finally {
         releaseSubmitLock('kasMasuk');
     }
@@ -9849,17 +10355,26 @@ async function showClosingModal() {
     });
 
     try {
-        const res = await fetch(API_URL, {
-            method: 'POST',
-            body: JSON.stringify({
-                action: 'getClosingData',
-                cabang: activeCabang,
-                kasir: userNama,
-                waktu_absen: waktuAbsen
-            })
-        }).then(r => r.json());
+        let res = null;
+        try {
+            res = await fetch(API_URL, {
+                method: 'POST',
+                body: JSON.stringify({
+                    action: 'getClosingData',
+                    cabang: activeCabang,
+                    kasir: userNama,
+                    waktu_absen: waktuAbsen
+                })
+            }).then(r => r.json());
+        } catch(fetchErr) {
+            console.warn('[Closing] getClosingData gagal, lanjut dengan data lokal:', fetchErr);
+            res = { status: 'success', data: {} }; // fallback ke data lokal
+        }
 
-        if (res.status !== 'success') throw new Error(res.message || 'Gagal mengambil data');
+        if (!res || res.status !== 'success') {
+            console.warn('[Closing] getClosingData status bukan success, lanjut dengan data lokal');
+            res = { status: 'success', data: {} };
+        }
 
         const d = res.data || {};
 
@@ -10098,9 +10613,9 @@ async function showClosingModal() {
         if (result.isConfirmed) {
             loading(true);
 
-            // SAVE REKAP SHIFT
-            await fetch(API_URL, { 
-                method: 'POST', 
+            // [BUG FIX] SAVE REKAP SHIFT — Content-Type + cek response (throw jika gagal)
+            const resClosing = await fetch(API_URL, {
+                method: 'POST',
                 body: JSON.stringify({
                     action: 'saveShiftClosing',
                     cabang: activeCabang,
@@ -10119,11 +10634,15 @@ async function showClosingModal() {
                     total_diskon: totalDiskonShift,
                     saldo_akhir: saldoAkhir
                 })
-            });
+            }).then(r => r.json()).catch(() => null);
 
-            // Update AbsenLog jadi Selesai
-            await fetch(API_URL, { 
-                method: 'POST', 
+            if (!resClosing || resClosing.status !== 'success') {
+                throw new Error(resClosing?.message || resClosing?.error || 'saveShiftClosing gagal — rekap shift tidak tersimpan di server.');
+            }
+
+            // [BUG FIX] Update AbsenLog — Content-Type + cek response (warn saja, jangan blokir closing)
+            const resAbsenSelesai = await fetch(API_URL, {
+                method: 'POST',
                 body: JSON.stringify({
                     action: 'saveAbsen',
                     kasir: userNama,
@@ -10131,7 +10650,11 @@ async function showClosingModal() {
                     shift: shiftNama,
                     status: 'Selesai'
                 })
-            });
+            }).then(r => r.json()).catch(() => null);
+
+            if (!resAbsenSelesai || resAbsenSelesai.status !== 'success') {
+                console.warn('[Closing] saveAbsen Selesai gagal:', resAbsenSelesai);
+            }
 
             // Snapshot data untuk struk (ambil sebelum localStorage dibersihkan)
             const strukData = {
@@ -10152,9 +10675,7 @@ async function showClosingModal() {
                 saldoAkhir
             };
 
-            // ============================================================
             // AUTO-NONAKTIFKAN SHIFT setelah closing
-            // ============================================================
             try {
                 const shiftIdToDeactivate = shiftId || localStorage.getItem('shift_id') || '';
                 if (shiftIdToDeactivate) {
@@ -10168,9 +10689,6 @@ async function showClosingModal() {
                     });
                     console.log('[Shift] Auto-nonaktif shift ID:', shiftIdToDeactivate);
 
-                    // ========================================================
-                    // JADWALKAN REAKTIVASI SHIFT esok hari sesuai jam_mulai
-                    // ========================================================
                     const jamMulaiTersimpan = localStorage.getItem('shift_jam_mulai') ||
                         (ACTIVE_SHIFT && cleanTime(ACTIVE_SHIFT.Jam_Mulai || ACTIVE_SHIFT.jam_mulai)) || '00:00';
 
@@ -10203,7 +10721,6 @@ async function showClosingModal() {
 
             if (konfirmasiCetak.isConfirmed) {
                 printStrukClosing(strukData);
-                // Beri jeda agar print dialog muncul duluan baru logout
                 setTimeout(() => logout(), 1500);
             } else {
                 logout();
@@ -10350,7 +10867,8 @@ function bukaKasir(no, st) {
     } else { CART = []; }
 
     document.getElementById('cust-name').value = m ? (m.Pelanggan || m.pelanggan || "") : "";
-    document.getElementById('label-meja').innerText = "MEJA: " + no;
+    // [V23 FIX] Label yang lebih informatif untuk TakeAway
+    document.getElementById('label-meja').innerText = (no === 'TA' || no === 'TAKEAWAY') ? '🥡 TAKE AWAY' : 'MEJA: ' + no;
 
     // BONUS: Tampilkan info cabang aktif di header kasir untuk Admin
     const role = (localStorage.getItem('user_role') || 'Kasir').toLowerCase();
@@ -10437,16 +10955,24 @@ function renderRekapShiftTable(data) {
     const tfoot = document.getElementById('rekap-shift-tfoot');
     if (tfoot) {
         if (role2 === 'admin' && data.length > 0) {
-            const totModal  = data.reduce((s, r) => s + Number(r.Modal_Awal  || r.modal_awal  || 0), 0);
+            // Hanya jumlahkan arus kas aktual (Tunai, QRIS, Keluar, Transaksi, Diskon)
+            // Modal_Awal TIDAK dijumlahkan karena Modal_Awal shift berikutnya = Saldo_Akhir shift sebelumnya (operan kas) → double counting
             const totTunai  = data.reduce((s, r) => s + Number(r.Tunai       || r.tunai       || 0), 0);
             const totQris   = data.reduce((s, r) => s + Number(r.QRIS        || r.qris        || 0), 0);
             const totTrx    = data.reduce((s, r) => s + Number(r.Total_Transaksi || r.total_transaksi || r.count || 0), 0);
             const totDiskon = data.reduce((s, r) => s + Number(r.Total_Diskon || r.total_diskon || 0), 0);
             const totKeluar = data.reduce((s, r) => s + Number(r.Keluar      || r.keluar      || 0), 0);
-            const totSaldo  = data.reduce((s, r) => s + Number(r.Saldo_Akhir || r.saldo_akhir || 0), 0);
+            // Saldo_Akhir footer = Saldo_Akhir shift TERAKHIR (paling baru) sesuai filter aktif
+            // (bukan jumlah semua Saldo_Akhir — itu double counting karena setiap Saldo_Akhir sudah mengandung Modal_Awal)
+            const sortedForFooter = [...data].sort((a, b) =>
+                new Date(b.Timestamp || b.timestamp || b.Waktu_Closing || b.waktu_closing || 0) -
+                new Date(a.Timestamp || a.timestamp || a.Waktu_Closing || a.waktu_closing || 0)
+            );
+            const lastShift = sortedForFooter[0];
+            const totSaldo  = Number(lastShift.Saldo_Akhir || lastShift.saldo_akhir || 0);
             const f = (n) => 'Rp ' + n.toLocaleString('id-ID');
             const setF = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
-            setF('rekap-foot-modal',  f(totModal));
+            setF('rekap-foot-modal',  '-');
             setF('rekap-foot-tunai',  f(totTunai));
             setF('rekap-foot-qris',   f(totQris));
             setF('rekap-foot-trx',    totTrx + ' kali');
@@ -11118,15 +11644,18 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         }
 
-        var total     = Number(d.total||0);
-        var totalPaid = Number(d.total_paid||0);
-        var sisa      = Number(d.sisa||0);
-        var isP       = (d.status==='Partial') && totalPaid>0;
-        var grandAmt  = isP ? sisa : total;
+        // [V27] original_total = total transaksi keseluruhan (tidak berubah saat split)
+        // remaining_total = sisa tagihan setelah pembayaran parsial
+        var originalTotal  = Number(d.original_total  || d.total || 0);
+        var remainingTotal = Number(d.remaining_total || d.total || 0);
+        var totalPaid      = Number(d.total_paid || 0);
+        var sisa           = Number(d.sisa || 0);
+        var isP            = (d.status === 'Partial') && totalPaid > 0;
+        var grandAmt       = isP ? remainingTotal : originalTotal;
 
-        _setText('disp-subtotal',    'Rp '+total.toLocaleString('id-ID'));
+        _setText('disp-subtotal',    'Rp ' + originalTotal.toLocaleString('id-ID'));
         _setText('disp-grand-label', isP ? 'SISA TAGIHAN' : 'TOTAL');
-        _setText('disp-grand-total', 'Rp '+grandAmt.toLocaleString('id-ID'));
+        _setText('disp-grand-total', 'Rp ' + grandAmt.toLocaleString('id-ID'));
 
         var paidWrap = document.getElementById('disp-paid-wrap');
         if (paidWrap) {
