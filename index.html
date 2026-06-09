@@ -3145,7 +3145,7 @@
 // GLOBAL STATE
 // =============================================================
 // [V17] API_URL dikelola oleh SettingsManager — jangan hardcode
-let API_URL = 'https://script.google.com/macros/s/AKfycby0hD6fttq8jn9WVdnNXExIX291MGQ-6sY0Y8O5L1xtMH5eP6ZrNWCI5M2Jc8cWRukf/exec';
+let API_URL = 'https://script.google.com/macros/s/AKfycbzm9Psuv6QraxoRXlhqxKBBSnvO5ViQmPpq6_I_P-wvZiOrIK0Hz0MP1i_1F6pW5UrS/exec';
 let DATA = { products:[], tables:[], history:[], expenses:[], modal:[], users:[], branches:[], shifts:[], absenLog:[], rekapShift:[] };
 let CART = [], AKTIF_MEJA = "", KASIR = "", TOTAL_CART = 0;
 // [V16] PaymentSession state
@@ -3171,7 +3171,7 @@ const SETTINGS_SCHEMA = {
     display_interval:   { default: 2,                                     type: 'int',    tab: 'backend' },
     qris_mode:          { default: 'static',   type: 'select',  tab: 'payment', options: ['static','dynamic'] },
     qris_image_url:     { default: '',         type: 'string',  tab: 'payment' },
-    qris_file_id:       { default: '',         type: 'string',  tab: 'payment' },
+    qris_base64:        { default: '',         type: 'string',  tab: 'payment' },
     payment_gateway:    { default: 'none',     type: 'select',  tab: 'payment', options: ['none','tripay','midtrans','xendit','duitku'] },
     merchant_code:      { default: '',         type: 'string',  tab: 'payment' },
     api_key:            { default: '',         type: 'password',tab: 'payment' },
@@ -3299,6 +3299,11 @@ const SettingsManager = {
                 this._cache.qris_image_url = oldQrisUrl;
                 changed = true;
             }
+            // Migrate: drop legacy qris_file_id (Drive)
+            if (this._cache.qris_file_id !== undefined) {
+                delete this._cache.qris_file_id;
+                changed = true;
+            }
         }
         this._cache._version = SETTINGS_VERSION;
         if (changed) {
@@ -3323,11 +3328,9 @@ const SettingsManager = {
     }
 };
 
-// Helper: bangun URL thumbnail Drive dari file_id, fallback ke URL lama
-function _buildQrisDriveUrl(fileId, fallbackUrl) {
-    if (fileId && fileId.trim()) {
-        return 'https://drive.google.com/thumbnail?id=' + fileId.trim() + '&sz=w400';
-    }
+// Helper: ambil base64 QRIS, fallback ke legacy URL
+function _buildQrisUrl(base64, fallbackUrl) {
+    if (base64 && base64.trim()) return base64.trim();
     return fallbackUrl || '';
 }
 
@@ -3445,20 +3448,20 @@ function renderSettingsPage() {
                         <div class="col-12" id="s-qris-static-group" style="display:${s.get('qris_mode')==='static'?'block':'none'}">
                             <label class="form-label fw-bold small text-muted">QRIS IMAGE (Static)</label>
                             <div class="d-flex align-items-center gap-3 flex-wrap">
-                                <div id="s-qris-preview" class="text-center ${(s.get('qris_file_id') || s.get('qris_image_url')) ? '' : 'd-none'}" style="flex:0 0 auto">
-                                    <img id="s-qris-preview-img" src="${_esc(_buildQrisDriveUrl(s.get('qris_file_id'), s.get('qris_image_url')))}" style="max-height:140px;max-width:140px;border:1px solid #e2e8f0;border-radius:8px;padding:4px" onerror="this.style.display='none'">
+                                <div id="s-qris-preview" class="text-center ${(s.get('qris_base64') || s.get('qris_image_url')) ? '' : 'd-none'}" style="flex:0 0 auto">
+                                    <img id="s-qris-preview-img" src="${_esc(_buildQrisUrl(s.get('qris_base64'), s.get('qris_image_url')))}" style="max-height:140px;max-width:140px;border:1px solid #e2e8f0;border-radius:8px;padding:4px" onerror="this.style.display='none'">
                                 </div>
                                 <div style="flex:1;min-width:200px">
                                     <div class="mb-2">
                                         <input type="file" class="form-control" id="s-qris_file_input" accept="image/png,image/jpeg,image/jpg,image/webp" onchange="settingsPreviewQrisFile(this)">
-                                        <small class="text-muted">PNG/JPG/WebP maks 2MB. Gambar disimpan ke Google Drive.</small>
+                                        <small class="text-muted">PNG/JPG/WebP maks 2MB. Gambar disimpan sebagai Base64.</small>
                                     </div>
                                     <div id="s-qris-upload-status" class="small mb-2" style="display:none"></div>
                                     <div class="d-flex gap-2 flex-wrap">
-                                        <button class="btn btn-primary btn-sm fw-bold" onclick="settingsUploadQrisImage()" id="s-qris-upload-btn" style="display:none"><i class="bi bi-cloud-upload me-1"></i>Upload ke Drive</button>
-                                        ${s.get('qris_file_id') ? `<button class="btn btn-outline-danger btn-sm" onclick="settingsDeleteQrisImage()"><i class="bi bi-trash me-1"></i>Hapus Gambar</button>` : ''}
+                                        <button class="btn btn-primary btn-sm fw-bold" onclick="settingsUploadQrisImage()" id="s-qris-upload-btn" style="display:none"><i class="bi bi-image me-1"></i>Simpan Gambar</button>
+                                        ${s.get('qris_base64') ? `<button class="btn btn-outline-danger btn-sm" onclick="settingsDeleteQrisImage()"><i class="bi bi-trash me-1"></i>Hapus Gambar</button>` : ''}
                                     </div>
-                                    ${s.get('qris_file_id') ? `<div class="text-muted mt-1" style="font-size:10px">File ID: <span class="font-monospace">${_esc(s.get('qris_file_id').substring(0,20))}…</span></div>` : ''}
+                                    ${s.get('qris_base64') ? `<div class="text-muted mt-1" style="font-size:10px">Gambar tersimpan (Base64)</div>` : ''}
                                 </div>
                             </div>
                         </div>
@@ -3944,8 +3947,8 @@ function settingsSaveAll() {
         spreadsheet_id:    _sVal('s-spreadsheet_id'),
         display_interval:  parseInt(_sVal('s-display_interval') || '2') || 2,
         qris_mode:         _sVal('s-qris_mode'),
-        qris_image_url:    SettingsManager.get('qris_image_url'), // preserve legacy; only changed via upload
-        qris_file_id:      SettingsManager.get('qris_file_id'),   // only changed via upload/delete
+        qris_image_url:    SettingsManager.get('qris_image_url'), // preserve legacy fallback
+        qris_base64:       SettingsManager.get('qris_base64'),        // only changed via upload/delete
         payment_gateway:   _sVal('s-payment_gateway'),
         merchant_code:     _sVal('s-merchant_code'),
         api_key:           _sVal('s-api_key'),
@@ -3997,6 +4000,7 @@ function settingsSaveAll() {
         if (newSettings.qris_mode === 'static' && newSettings.qris_image_url) {
             localStorage.setItem('qris_url_static', newSettings.qris_image_url);
         }
+        // Base64 tidak perlu di-sync ke localStorage (sudah di SettingsManager)
         // [V21] Apply favicon if branding favicon was saved
         brandingApplyFavicon(newSettings.favicon_image || SettingsManager.get('favicon_image'));
         Swal.fire({ icon: 'success', title: 'Tersimpan!', text: 'Pengaturan berhasil disimpan dan langsung aktif.', timer: 2000, showConfirmButton: false, position: 'top-end', toast: true });
@@ -4109,7 +4113,7 @@ function settingsPreviewQrisFile(input) {
         if (previewImg) { previewImg.src = e.target.result; previewImg.style.display = 'block'; }
         if (previewWrap) previewWrap.classList.remove('d-none');
         if (uploadBtn) uploadBtn.style.display = '';
-        if (statusEl) { statusEl.textContent = 'Siap diupload. Klik "Upload ke Drive" untuk menyimpan.'; statusEl.className = 'small text-info mb-2'; statusEl.style.display = ''; }
+        if (statusEl) { statusEl.textContent = 'Siap disimpan. Klik "Simpan Gambar" untuk menyimpan.'; statusEl.className = 'small text-info mb-2'; statusEl.style.display = ''; }
     };
     reader.readAsDataURL(file);
 }
@@ -4121,11 +4125,8 @@ async function settingsUploadQrisImage() {
     const file = input?.files?.[0];
     if (!file) { Swal.fire('Pilih Gambar', 'Pilih file gambar terlebih dahulu.', 'warning'); return; }
 
-    const apiUrl = SettingsManager.get('api_url');
-    if (!apiUrl) { Swal.fire('API URL Kosong', 'Atur API URL di tab Sistem terlebih dahulu.', 'warning'); return; }
-
-    if (statusEl) { statusEl.textContent = 'Mengupload ke Google Drive…'; statusEl.className = 'small text-warning mb-2'; statusEl.style.display = ''; }
-    if (uploadBtn) { uploadBtn.disabled = true; uploadBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Uploading…'; }
+    if (statusEl) { statusEl.textContent = 'Membaca gambar…'; statusEl.className = 'small text-warning mb-2'; statusEl.style.display = ''; }
+    if (uploadBtn) { uploadBtn.disabled = true; uploadBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Menyimpan…'; }
 
     try {
         const base64Full = await new Promise((res, rej) => {
@@ -4134,64 +4135,51 @@ async function settingsUploadQrisImage() {
             r.onerror = () => rej(new Error('Gagal membaca file'));
             r.readAsDataURL(file);
         });
-        const base64 = base64Full.split(',')[1];
-        const oldFileId = SettingsManager.get('qris_file_id') || '';
 
-        const resp = await fetch(apiUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                action:       'uploadQrisImage',
-                base64:       base64,
-                mime_type:    file.type,
-                file_name:    'qris_static_' + Date.now() + '.' + file.name.split('.').pop(),
-                old_file_id:  oldFileId
-            })
-        });
-        const result = await resp.json();
+        // Simpan base64 data-URL ke SettingsManager
+        SettingsManager.set('qris_base64', base64Full);
+        SettingsManager.set('qris_image_url', ''); // clear legacy URL
+        localStorage.removeItem('qris_url_static');
 
-        if (result.status === 'success' && result.file_id) {
-            SettingsManager.set('qris_file_id', result.file_id);
-            SettingsManager.set('qris_image_url', ''); // clear legacy URL
-            localStorage.removeItem('qris_url_static');
-            if (statusEl) { statusEl.textContent = '✓ Upload berhasil! File ID: ' + result.file_id.substring(0,20) + '…'; statusEl.className = 'small text-success mb-2'; }
-            Swal.fire({ icon: 'success', title: 'Upload Berhasil!', text: 'Gambar QRIS berhasil disimpan ke Google Drive.', timer: 2500, showConfirmButton: false, toast: true, position: 'top-end' });
-            // Re-render settings panel dengan data terbaru
-            setTimeout(() => {
-                if (typeof renderSettingsPage === 'function') renderSettingsPage();
-                // Aktifkan kembali tab Payment
-                const payTab = document.querySelector('[href="#stab-payment"]');
-                if (payTab) setTimeout(() => payTab.click(), 100);
-            }, 400);
-        } else {
-            throw new Error(result.message || 'Upload gagal');
+        // Opsional: kirim ke backend untuk disimpan di sheet Setting
+        const apiUrl = SettingsManager.get('api_url');
+        if (apiUrl) {
+            try {
+                await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'saveQrisBase64', base64: base64Full })
+                });
+            } catch(e) { /* non-fatal */ }
         }
+
+        if (statusEl) { statusEl.textContent = '✓ Gambar QRIS berhasil disimpan.'; statusEl.className = 'small text-success mb-2'; }
+        Swal.fire({ icon: 'success', title: 'Tersimpan!', text: 'Gambar QRIS berhasil disimpan.', timer: 2000, showConfirmButton: false, toast: true, position: 'top-end' });
+        setTimeout(() => {
+            if (typeof renderSettingsPage === 'function') renderSettingsPage();
+            const payTab = document.querySelector('[href="#stab-payment"]');
+            if (payTab) setTimeout(() => payTab.click(), 100);
+        }, 400);
     } catch(e) {
         if (statusEl) { statusEl.textContent = '✗ Gagal: ' + e.message; statusEl.className = 'small text-danger mb-2'; }
-        Swal.fire('Upload Gagal', e.message, 'error');
+        Swal.fire('Gagal', e.message, 'error');
     } finally {
-        if (uploadBtn) { uploadBtn.disabled = false; uploadBtn.innerHTML = '<i class="bi bi-cloud-upload me-1"></i>Upload ke Drive'; }
+        if (uploadBtn) { uploadBtn.disabled = false; uploadBtn.innerHTML = '<i class="bi bi-image me-1"></i>Simpan Gambar'; }
     }
 }
 
 async function settingsDeleteQrisImage() {
-    const fileId = SettingsManager.get('qris_file_id');
-    if (!fileId) return;
+    if (!SettingsManager.get('qris_base64') && !SettingsManager.get('qris_image_url')) return;
     const confirm = await Swal.fire({
         icon: 'warning', title: 'Hapus Gambar QRIS?',
-        text: 'Gambar akan dihapus dari Google Drive dan tidak bisa digunakan di pembayaran.',
+        text: 'Gambar QRIS akan dihapus dan tidak bisa digunakan di pembayaran.',
         showCancelButton: true, confirmButtonText: 'Hapus', cancelButtonText: 'Batal',
         confirmButtonColor: '#ef4444'
     });
     if (!confirm.isConfirmed) return;
-    const apiUrl = SettingsManager.get('api_url');
-    if (apiUrl) {
-        try {
-            await fetch(apiUrl, { method:'POST', headers:{'Content-Type':'application/json'},
-                body: JSON.stringify({ action:'deleteQrisImage', file_id: fileId }) });
-        } catch(e) {}
-    }
-    SettingsManager.set('qris_file_id', '');
+    SettingsManager.set('qris_base64', '');
+    SettingsManager.set('qris_image_url', '');
+    localStorage.removeItem('qris_url_static');
     Swal.fire({ icon:'success', title:'Dihapus', timer:1500, showConfirmButton:false, toast:true, position:'top-end' });
     setTimeout(() => {
         if (typeof renderSettingsPage === 'function') renderSettingsPage();
@@ -4592,11 +4580,9 @@ function _getQrisUrl() {
         if (inputEl && inputEl.value.trim()) return inputEl.value.trim();
         return '';
     }
-    // Prioritas: file_id dari Drive → legacy qris_image_url → localStorage
-    const fileId = SettingsManager.get('qris_file_id');
-    if (fileId && fileId.trim()) {
-        return 'https://drive.google.com/thumbnail?id=' + fileId.trim() + '&sz=w400';
-    }
+    // Prioritas: Base64 → legacy qris_image_url → localStorage
+    const base64 = SettingsManager.get('qris_base64');
+    if (base64 && base64.trim()) return base64.trim();
     return SettingsManager.get('qris_image_url') || localStorage.getItem('qris_url_static') || '';
 }
 
@@ -5334,12 +5320,12 @@ async function refreshData() {
         // Rekap Shift: coba semua kemungkinan nama field dari backend
         DATA.rekapShift = res.rekapShift || res.rekap_shift || res.shiftClosing || res.shift_closing || res.rekap || DATA.rekapShift || [];
 
-        // Sync appSettings dari server (termasuk QRIS_FILE_ID)
+        // Sync appSettings dari server (QRIS_BASE64)
         if (res.appSettings && typeof res.appSettings === 'object') {
-            const srvQrisFileId = (res.appSettings['QRIS_FILE_ID'] || '').toString().trim();
-            if (srvQrisFileId) {
-                // Server punya file_id → jadikan sumber kebenaran
-                SettingsManager.set('qris_file_id', srvQrisFileId);
+            const srvQrisBase64 = (res.appSettings['QRIS_BASE64'] || '').toString().trim();
+            if (srvQrisBase64 && !SettingsManager.get('qris_base64')) {
+                // Server punya Base64 dan lokal belum ada → sync
+                SettingsManager.set('qris_base64', srvQrisBase64);
             }
         }
 
@@ -11682,17 +11668,18 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         var qrUrl     = (d.qr_url||'').toString().trim();
-        // Fallback: jika qr_url kosong tapi ada qris_file_id dari server (static QRIS),
-        // bangun thumbnail URL dari Drive file_id
+        // Fallback: jika qr_url kosong, pakai QRIS Base64 (static QRIS)
         if (!qrUrl) {
-            var dispFileId = (d.qris_file_id || '').toString().trim();
-            if (!dispFileId) {
-                // Coba dari SettingsManager (sync saat refresh)
-                dispFileId = (typeof SettingsManager !== 'undefined' ? SettingsManager.get('qris_file_id') : '') || '';
+            var dispBase64 = (d.qris_base64 || '').toString().trim();
+            if (!dispBase64) {
+                // Coba dari SettingsManager (lokal)
+                dispBase64 = (typeof SettingsManager !== 'undefined' ? SettingsManager.get('qris_base64') : '') || '';
             }
-            if (dispFileId) {
-                qrUrl = 'https://drive.google.com/thumbnail?id=' + dispFileId + '&sz=w400';
+            if (!dispBase64) {
+                // Fallback legacy: qris_image_url
+                dispBase64 = (typeof SettingsManager !== 'undefined' ? SettingsManager.get('qris_image_url') : '') || '';
             }
+            if (dispBase64) qrUrl = dispBase64;
         }
         var qrPanel   = document.getElementById('disp-qr-panel');
         var noQrPanel = document.getElementById('disp-noqr-panel');
