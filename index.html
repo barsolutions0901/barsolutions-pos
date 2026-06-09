@@ -3145,7 +3145,7 @@
 // GLOBAL STATE
 // =============================================================
 // [V17] API_URL dikelola oleh SettingsManager — jangan hardcode
-let API_URL = 'https://script.google.com/macros/s/AKfycbzm9Psuv6QraxoRXlhqxKBBSnvO5ViQmPpq6_I_P-wvZiOrIK0Hz0MP1i_1F6pW5UrS/exec';
+let API_URL = 'https://script.google.com/macros/s/AKfycbzJwlsrqgR7bxPt799lhkA2YGnmi6OzjdL9HNa0mdJSNjnalPW9__4XhYw5bXPQ3HZi/exec';
 let DATA = { products:[], tables:[], history:[], expenses:[], modal:[], users:[], branches:[], shifts:[], absenLog:[], rekapShift:[] };
 let CART = [], AKTIF_MEJA = "", KASIR = "", TOTAL_CART = 0;
 // [V16] PaymentSession state
@@ -10042,6 +10042,12 @@ async function prosesSplitBill() {
         const splitClientId = (typeof generateOrderNumber === 'function')
             ? generateOrderNumber()
             : `SPLIT-${Date.now()}-${activeCabang || 'X'}`;
+        // [FIX SPLIT DISPLAY] Update Item_JSON di session ke item yang sedang dibayar
+        // agar Customer Display hanya menampilkan item yang dipilih kasir
+        if (ACTIVE_SESSION_ID) {
+            _v16UpdateSession({ items: JSON.stringify(paidItemsArray) }).catch(() => {});
+        }
+
         const splitPayload = {
             action:               'splitBill',
             client_trx_id:        splitClientId,  // [V25 FIX] Idempotency key
@@ -10117,7 +10123,8 @@ async function _v16RecordSplitPayment(splitTrxId, metode, nominalBayar, sisaTagi
                 action:          'updatePaymentSession',
                 session_id:      sesId,
                 status:          isFullyPaid ? 'Paid' : 'Partial',
-                remaining_total: sisaTagihan  // [V27] update Remaining_Total (bukan Total/Original_Total)
+                remaining_total: sisaTagihan,  // [V27] update Remaining_Total (bukan Total/Original_Total)
+                items:           JSON.stringify(remainingCart) // [FIX SPLIT DISPLAY] update Item_JSON ke sisa item
             };
             if (splitTrxId) updatePayload.id_transaksi = splitTrxId;
             // [V27] Total_Paid diupdate via _updateSessionAfterSplitPayment di backend (actionSplitBill)
